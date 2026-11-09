@@ -124,14 +124,4 @@ make package/luci-app-pon-status/compile V=s
 
 LuCI 应用与脚本：**Apache-2.0**。
 
-本仓库所有源码文件在文件头以 `SPDX-License-Identifier: Apache-2.0` 声明，各包 `Makefile` 同时声明 `PKG_LICENSE:=Apache-2.0`：
-
-| 文件类型 | 写法 |
-|---|---|
-| `Makefile` | 首行 `# SPDX-License-Identifier: Apache-2.0` |
-| `*.js` | 首行 `// SPDX-License-Identifier: Apache-2.0` |
-| shell 脚本 | shebang 之后 `# SPDX-License-Identifier: Apache-2.0` |
-| `*.json`（`menu.d` / `rpcd/acl.d`） | JSON 语法不允许注释，文件内不写 SPDX 行，授权以本文件为准 |
-| `*.md` | 纯文档，授权以本文件为准 |
-
 完整许可证文本见 [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0)。
