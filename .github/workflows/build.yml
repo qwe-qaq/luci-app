@@ -1,30 +1,3 @@
-## ============================================================================
-##  Build LuCI packages  —  qwe-qaq/luci-app
-##
-##  仓库根目录下每个 luci-app-* 目录就是一个 OpenWrt/LuCI 软件包。
-##
-##  job 一览：
-##    check      结构 + shell 静态检查（编译前先挡住「装上去才发现」的错误）
-##    build      OpenWrt 25.12+ 的 apk 包：apk-tools 静态二进制 `apk mkpkg` 组装
-##    build-ipk  24.10 及更早分支（opkg/.ipk）设备用：脚本手工组装 ipk
-##    release    构建成功即发布到 Releases：
-##               - push 到 main → 滚动更新 `snapshot` Release（prerelease）
-##               - 打 v* tag   → 以 tag 名建正式 Release
-##
-##  两个 build job 都**不用 docker、不用 SDK**：仓库里的包是纯数据包
-##  （js/shell/json，无 C 代码），不需要交叉编译器，依赖也只是写进元数据。
-##  全程无镜像拉取、无 feeds 初始化，两个 job 各几十秒。
-##  产物都是 noarch，arm64 设备直接装（不用再为架构铺矩阵）。
-##
-##  ── 安装说明 ────────────────────────────────────────────────────────────────
-##  25.12+（apk）：  apk add --allow-untrusted ./luci-app-xxx-<ver>.apk
-##  24.10-（ipk）：  opkg install ./luci-app-xxx_<ver>_all.ipk
-##
-##  ── 说明 ──────────────────────────────────────────────────────────────────
-##  * 依赖只写进包元数据，构建过程不检查依赖是否真实存在。官方源里没有的包
-##    （如 airoha-ponctl、kmod-nft-fullcone）装到路由器上前请自备。
-##  * 打包脚本：apk → .github/scripts/build-apk.sh；ipk → build-ipk.sh。
-## ============================================================================
 name: Build LuCI packages
 
 on:
@@ -58,7 +31,7 @@ jobs:
   # --------------------------------------------------------------------------
   check:
     name: Structure & ShellCheck
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -87,12 +60,16 @@ jobs:
           shellcheck -x --severity=error -e SC1091 "${files[@]}"
 
       - name: "ShellCheck (advisory / warning and above)"
+        # 只提示、不阻断；warning 仍会打印在日志里。
+        # shellcheck 发现 warning 时返回 1，在默认的 -e 下会让 step 失败，
+        # 即便 continue-on-error 放过，Annotations 里也会留一条
+        # "Process completed with exit code 1."。此处只吸收这个退出码。
         continue-on-error: true
         run: |
           files=()
           mapfile -t files < <(grep -rIl -E '^#![[:space:]]*(/usr)?/bin/(env[[:space:]]+)?(ba)?sh' . --exclude-dir=.git || true)
           [ "${#files[@]}" -gt 0 ] || exit 0
-          shellcheck -x --format=gcc --severity=warning -e SC1091,SC3043 "${files[@]}"
+          shellcheck -x --format=gcc --severity=warning -e SC1091,SC3043 "${files[@]}" || true
 
       - name: JSON 语法校验
         run: |
@@ -114,7 +91,7 @@ jobs:
   build:
     name: Build apk (no-SDK)
     needs: check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -162,7 +139,7 @@ jobs:
   build-ipk:
     name: Build ipk (no-SDK)
     needs: check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       IPK_ARCH: ${{ github.event.inputs.ipk_arch || 'all' }}
     steps:
@@ -205,7 +182,7 @@ jobs:
     name: Release
     if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
     needs: [build, build-ipk]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
