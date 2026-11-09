@@ -1,8 +1,4 @@
 // SPDX-License-Identifier: Apache-2.0
-//
-
-// 纯 JS 版配置页（form.Map），替代原来的 Lua CBI。
-// 不再需要 luci-lua-runtime / lua / libubus-lua 等任何 Lua 组件。
 
 'use strict';
 'require view';
