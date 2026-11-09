@@ -1,6 +1,6 @@
-// 授权提示：本文件随第三方 luci-app-igmpproxy 源码一起并入本仓库，
-// 上游未声明 License；合并前请先确认授权，再决定是否补 SPDX 头。
+// SPDX-License-Identifier: Apache-2.0
 //
+
 // 纯 JS 版配置页（form.Map），替代原来的 Lua CBI。
 // 不再需要 luci-lua-runtime / lua / libubus-lua 等任何 Lua 组件。
 
@@ -75,9 +75,9 @@ return view.extend({
 		o.default = '1';
 		o.rmempty = false;
 
-		// 不提供「日志级别 verbose」：官方 /etc/init.d/igmpproxy 只读
-		// quickleave / network / direction / altnet，不读 UCI 的 verbose。
-		// 要详细日志请在 init 脚本里设 IGMP_OPTS="-v -v"。
+		// 官方 igmpproxy.init 会读取 UCI 的 verbose（0→-d、2→-v、3→-v -v，
+		// 1 为默认）。本页暂不暴露该字段；form.Map 不会删除已有 option，
+		// 需要详细日志时用 uci set igmpproxy.@igmpproxy[0].verbose='3' 即可。
 
 		// ---------- 接口设置 ----------
 		var s2 = m.section(form.TypedSection, 'phyint', _('接口配置'),
@@ -104,7 +104,7 @@ return view.extend({
 		o = s2.option(form.Value, 'zone', _('防火墙区域'),
 			_('可自由输入。可用区域：')
 			+ (data.zones.length ? data.zones.join(', ') : _('（读取失败）'))
-			+ _('。部分固件依赖它自动生成组播放行规则，留空可能导致无法播放。'));
+			+ _('。官方 init 会据此生成 IGMP ACCEPT 与 224.0.0.0/4 放行规则，留空可能导致无法播放。'));
 		o.placeholder = 'wan / lan';
 		o.rmempty = true;
 

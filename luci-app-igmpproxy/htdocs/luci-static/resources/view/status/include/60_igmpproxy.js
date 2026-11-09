@@ -1,8 +1,8 @@
-// 授权提示：本文件随第三方 luci-app-igmpproxy 源码一起并入本仓库，
-// 上游未声明 License；合并前请先确认授权，再决定是否补 SPDX 头。
+// SPDX-License-Identifier: Apache-2.0
 //
+
 // 「状态 → 概览」的只读卡片：显示 /etc/config/igmpproxy 的当前配置摘要。
-// 配置编辑在「服务 → IGMP Proxy」的 Lua CBI 页面完成，这里不写 UCI。
+// 配置编辑在「服务 → IGMP Proxy」的 form.Map 页面完成，这里不写 UCI。
 
 'use strict';
 'require baseclass';

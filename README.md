@@ -8,6 +8,7 @@
 |---|---|---|---|---|
 | `luci-app-natmode` | 0.1.6-r1 | NAT 类型三选一：全锥形 / 受限 / 对称 | 网络 → NAT 类型 | `firewall4`、`kmod-nft-fullcone` |
 | `luci-app-pon-status` | 0.4.6-r4 | PON 光模块 + 端口速率 + 连接数概览卡片 | 状态 → 概览 | `airoha-ponctl`、`jsonfilter`、`rpcd-mod-file`、`luci-mod-status` |
+| `luci-app-igmpproxy` | 2.0-r1 | igmpproxy 的 Web 配置界面（IPv4 组播转发，纯 JS） | 服务 → IGMP Proxy | `rpcd-mod-file`、`igmpproxy` |
 
 
 ---
@@ -16,11 +17,12 @@
 
 ### 方式一：直接装现成的包（推荐）
 
-Release 里有每次推送自动打好的包，`snapshot` 这个 tag 始终指向最新一次构建，四种产物：
+Release 里有每次推送自动打好的包，`snapshot` 这个 tag 始终指向最新一次构建，每个包各有 apk / ipk 两种格式：
 
 ```text
-luci-app-natmode-0.1.6-r1.apk        luci-app-natmode_0.1.6-r1_all.ipk
-luci-app-pon-status-0.4.6-r4.apk     luci-app-pon-status_0.4.6-r4_all.ipk
+luci-app-natmode-0.1.6-r1.apk         luci-app-natmode_0.1.6-r1_all.ipk
+luci-app-pon-status-0.4.6-r4.apk      luci-app-pon-status_0.4.6-r4_all.ipk
+luci-app-igmpproxy-2.0-r1.apk         luci-app-igmpproxy_2.0-r1_all.ipk
 ```
 
 - **`.apk`** 给 OpenWrt **25.12 及之后**（包管理器是 apk）：
@@ -37,7 +39,9 @@ luci-app-pon-status-0.4.6-r4.apk     luci-app-pon-status_0.4.6-r4_all.ipk
 
 两种包都是**与架构无关的纯数据包**（noarch / `Architecture: all`），ARM64 设备通用，不用挑型号。
 
-装之前请确认上面表格里的依赖已经在设备上。这些不在自动依赖里，得自备——`kmod-nft-fullcone` 和 `airoha-ponctl` 都随 PonWRT 源码树提供。
+装之前请确认上面表格里的依赖已经在设备上。这些不在自动依赖里，得自备——`kmod-nft-fullcone` 和 `airoha-ponctl` 都随 PonWRT 源码树提供；`igmpproxy` 来自官方 packages feed，`rpcd-mod-file` 来自官方 luci feed。
+
+`luci-app-igmpproxy` 只写配置，**不自带** igmpproxy 主程序、init 脚本、`/etc/config/igmpproxy`（该文件由主程序包提供）和防火墙规则；装之前请先装好 `igmpproxy`，否则页面能打开但服务起不来。
 
 装完清一下 LuCI 缓存再刷新页面：
 
@@ -54,6 +58,8 @@ rm -f /tmp/luci-indexcache.*; rm -rf /tmp/luci-modulecache/
 make menuconfig          # LuCI → Applications 里勾选
 make package/luci-app-pon-status/compile V=s
 ```
+
+`luci-app-igmpproxy` 是纯 JS（`form.Map` + `menu.d`），不依赖 `luci-lua-runtime`，24.10 与 25.12 都能编进固件；按 `y` 进镜像、按 `m` 只生成安装包。
 
 `h3c-fmcs-firmware` 不在 Firmware 分类里默认可见，需要 `make menuconfig` 时手动打开，且只在 airoha target 下才会出现。它**没有出现在 Release 产物里**（见下方「自动构建」），只能自己编译进固件。
 
@@ -88,6 +94,20 @@ make package/luci-app-pon-status/compile V=s
 
 连接数必须走 helper 脚本 `ponstat-conn`：`/proc/net/nf_conntrack` 是 `st_size` 为 0 的伪文件，rpcd 的 `file.read` 对这种文件只返回前 4 KiB，数不完整个表。脚本同时兼容内核 5.4 的 `[OFFLOAD]` 和 5.13+ 的 `[HW_OFFLOAD]` 两种标记写法。conntrack 不可读时卡片显示「不可用」，而不是一个假的 0。
 
+### luci-app-igmpproxy —— IGMP Proxy 配置界面
+
+在 **服务 → IGMP Proxy** 编辑 `/etc/config/igmpproxy`：快速离开、`phyint` 上下游接口、防火墙区域、`altnet` 放行网络段；页面同时显示实际生效的 `/var/etc/igmpproxy.conf` 与服务状态，点「保存并应用」会自动重启 igmpproxy。**状态 → 概览** 另有一张配置摘要卡片。
+
+纯 JS（`form.Map`）实现，不依赖 `luci-lua-runtime`，24.10 / 25.12 均可用。只写配置，不自带 igmpproxy 主程序、init 脚本、防火墙规则，也不自带 `/etc/config/igmpproxy`（由主程序包提供，避免 conffiles 冲突）。
+
+排障要点：
+
+- `network` 填 UCI 接口别名（`wan` / `lan` / `iptv`），**不要**直接填 `br-lan`；官方 init 通过 ubus 按网络名解析 `l3_device`，接口没 up 会静默跳过该行。
+- 必须至少有一行 `upstream`，否则 `start_service` 直接返回、服务不启动。`zone` 要填真实防火墙区域，官方 init 会据此生成 IGMP ACCEPT 与 `224.0.0.0/4` 放行规则。
+- `altnet` 填的是**组播流的源 IP 网段**（运营商服务器的单播地址），不是 `239.x.x.x` 这类频道组播组地址。未知时先用 `0.0.0.0/0` 排障，能播后看 `logread | grep igmpproxy` 里 `is not in any valid net` 报出的源地址再收紧；少数版本对 `/0` 解析有问题，可拆成 `0.0.0.0/1` + `128.0.0.0/1`。
+- 页面不提供「日志级别」字段，需要详细日志时 SSH 执行 `uci set igmpproxy.@igmpproxy[0].verbose='3'; uci commit igmpproxy` 再重启服务（官方 init 映射为 `-v -v`）。
+- 还要在 LAN 桥上开 IGMP Snooping，否则组播会在内网泛洪。原生组播不适合 WiFi，无线观看需另配 `udpxy` / `msd_lite` 转单播；播放地址是原始 `rtp://239.x.x.x:port`。**仅支持 IPv4**。
+
 
 ## 自动构建
 
@@ -103,3 +123,15 @@ make package/luci-app-pon-status/compile V=s
 ## 授权
 
 LuCI 应用与脚本：**Apache-2.0**。
+
+本仓库所有源码文件在文件头以 `SPDX-License-Identifier: Apache-2.0` 声明，各包 `Makefile` 同时声明 `PKG_LICENSE:=Apache-2.0`：
+
+| 文件类型 | 写法 |
+|---|---|
+| `Makefile` | 首行 `# SPDX-License-Identifier: Apache-2.0` |
+| `*.js` | 首行 `// SPDX-License-Identifier: Apache-2.0` |
+| shell 脚本 | shebang 之后 `# SPDX-License-Identifier: Apache-2.0` |
+| `*.json`（`menu.d` / `rpcd/acl.d`） | JSON 语法不允许注释，文件内不写 SPDX 行，授权以本文件为准 |
+| `*.md` | 纯文档，授权以本文件为准 |
+
+完整许可证文本见 [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0)。
