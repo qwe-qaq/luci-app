@@ -1,0 +1,16 @@
+{
+	"luci-app-igmpproxy": {
+		"description": "Grant UCI access to igmpproxy configuration and service control",
+		"read": {
+			"uci": [ "igmpproxy", "network", "firewall" ],
+			"file": {
+				"/var/etc/igmpproxy.conf": [ "read" ],
+				"/etc/init.d/igmpproxy status": [ "exec" ],
+				"/etc/init.d/igmpproxy restart": [ "exec" ]
+			}
+		},
+		"write": {
+			"uci": [ "igmpproxy" ]
+		}
+	}
+}
