@@ -16,6 +16,7 @@
 # 路径可用环境变量覆盖，只为本机回归测试用；生产环境不要设置
 LED_ROOT=${LEDPANEL_LED_ROOT:-/sys/class/leds}
 GPIO_DBG=${LEDPANEL_GPIO_DBG:-/sys/kernel/debug/gpio}
+USB_ROOT=${LEDPANEL_USB_ROOT:-/sys/bus/usb/devices}
 RUN_DIR=${LEDPANEL_RUN_DIR:-/var/run/ledpanel}
 PON_DBG_OVERRIDE=${LEDPANEL_PON_DBG:-}
 CONFIG=ledpanel
@@ -63,8 +64,8 @@ led_spec() {
 		sys_red)  echo "red:sys always_off 4" ;;
 		vpn)      echo "green:vpn vpn_up 5" ;;
 		wlan)     echo "green:wlan wlan_sta 6" ;;
-		usb)      echo "green:usb usb_present 8" ;;
-		usb2)     echo "green:usb2 usb_present 7" ;;
+		usb)      echo "green:usb-1 usb_present:usb2 8" ;;
+		usb2)     echo "green:usb-2 usb_present:usb3 7" ;;
 		sfp)      echo "green:2g5-fiber sfp_link 9" ;;
 		voice1)   echo "green:voice1 voice_hook 10" ;;
 		voice2)   echo "green:voice2 voice_hook 11" ;;
@@ -146,8 +147,8 @@ led_desc() {
 		sys_red)  echo "系统故障告警，默认灭" ;;
 		vpn)      echo "VPN 隧道 up 时亮" ;;
 		wlan)     echo "有终端关联时亮" ;;
-		usb)      echo "USB 总线有设备时亮" ;;
-		usb2)     echo "第二路 USB 指示" ;;
+		usb)      echo "USB2.0 侧有设备时亮" ;;
+		usb2)     echo "USB3.0(SuperSpeed) 侧有设备时亮" ;;
 		sfp)      echo "2.5G 光口有载波时亮" ;;
 		voice1)   echo "FXS 无状态源，默认灭" ;;
 		voice2)   echo "FXS 无状态源，默认灭" ;;
@@ -244,12 +245,21 @@ wlan_stations() {
 	any_iface_up "$WLAN_IFACE"
 }
 
+# $1 缺省=任意设备；usb2=只看 USB2.0 侧（480M 及以下）；usb3=只看 SuperSpeed 侧。
+# 本板实际只有 1fad0000 这一个 xhci 控制器在跑，它同时挂在 usb1(480M) 和 usb2(20G)
+# 两条根 hub 上，两个面板灯因此不能按总线号分，只能按设备协商速率分。
 usb_present() {
-	for _d in /sys/bus/usb/devices/*-*; do
+	for _d in "$USB_ROOT"/*-*; do
 		[ -d "$_d" ] || continue
 		# 排除接口节点（形如 1-1:1.0 / 2-1.2:1.0），只要设备节点
 		case "${_d##*/}" in
 			*:*) continue ;;
+		esac
+		case "$1" in
+			usb2) _sp=$(cat "$_d/speed" 2>/dev/null)
+			      [ "${_sp%%.*}" -le 480 ] 2>/dev/null || continue ;;
+			usb3) _sp=$(cat "$_d/speed" 2>/dev/null)
+			      [ "${_sp%%.*}" -gt 480 ] 2>/dev/null || continue ;;
 		esac
 		return 0
 	done
@@ -285,7 +295,7 @@ rule_state() {
 		wlan_sta)
 			if wlan_stations; then echo on; else echo off; fi ;;
 		usb_present)
-			if usb_present; then echo on; else echo off; fi ;;
+			if usb_present "$2"; then echo on; else echo off; fi ;;
 		sfp_link)
 			if carrier_on "$SFP_IFACE"; then echo on; else echo off; fi ;;
 		voice_hook)
@@ -391,7 +401,12 @@ tick() {
 			blink) eval "_bms=\$BMS_$_n"
 			       [ -n "$_bms" ] || _bms="$BLINK_MS"
 			       _want="blink:$_bms" ;;
-			*)     _want=$(rule_state "$_rule") ;;
+			*)     # 规则可带参数：usb_present:usb3 -> 规则名 usb_present，参数 usb3
+			       case "$_rule" in
+				       *:*) _rname=${_rule%%:*}; _rarg=${_rule#*:} ;;
+				       *)   _rname=$_rule;     _rarg= ;;
+			       esac
+			       _want=$(rule_state "$_rname" "$_rarg") ;;
 		esac
 
 		apply_led "$_n" "$(led_path "$_sys" "$_pin")" "$_want"
