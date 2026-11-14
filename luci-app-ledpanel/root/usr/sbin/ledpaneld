@@ -141,7 +141,7 @@ led_desc() {
 		wlan)     echo "有终端关联时亮" ;;
 		usb)      echo "USB2.0 侧有设备时亮" ;;
 		usb2)     echo "USB3.0(SuperSpeed) 侧有设备时亮" ;;
-		sfp)      echo "2.5G 光口有载波时亮" ;;
+		sfp)      echo "2.5G 光电复用口有载波时亮（铜口或光口任一）" ;;
 		voice1)   echo "FXS 无状态源，默认灭" ;;
 		voice2)   echo "FXS 无状态源，默认灭" ;;
 		voice3)   echo "FXS 无状态源，默认灭" ;;
@@ -316,7 +316,13 @@ rule_state() {
 		usb_present)
 			if usb_present "$2"; then echo on; else echo off; fi ;;
 		sfp_link)
-			if carrier_on "$SFP_IFACE"; then echo on; else echo off; fi ;;
+			# 2.5G 是光电复用口：铜口(lan1)与光口(sfp0)共用同一颗面板灯。
+			# SFP_IFACE 可写多个空格分隔的 netdev，任一有载波就点亮，
+			# 否则插网线降速到 1G/100M 时灯会误灭（sfp0 恒 NO-CARRIER）。
+			for _i in $SFP_IFACE; do
+				carrier_on "$_i" && { echo on; return 0; }
+			done
+			echo off ;;
 		voice_hook)
 			if voice_hook "$VOICE_CMD"; then echo on; else echo off; fi ;;
 		*) echo off ;;
@@ -379,7 +385,7 @@ load_config() {
 	config_get BLINK_MS      settings blink_ms          500
 	config_get VPN_IFACE     settings vpn_iface         ""
 	config_get WLAN_IFACE    settings wlan_iface        ""
-	config_get SFP_IFACE     settings sfp_iface         sfp0
+	config_get SFP_IFACE     settings sfp_iface         "sfp0 lan1"
 	config_get DOWNLINK_IFACE settings downlink_iface   ""
 	config_get VOICE_CMD     settings voice_cmd         ""
 

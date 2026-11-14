@@ -239,15 +239,15 @@ return view.extend({
 				])
 			]),
 			E('div', { 'class': 'cbi-value' }, [
-				E('label', { 'class': 'cbi-value-title' }, _('2.5G 光口接口')),
+				E('label', { 'class': 'cbi-value-title' }, _('2.5G 光电复用口接口')),
 				E('div', { 'class': 'cbi-value-field' }, [
 					E('input', {
 						'class': 'cbi-input-text',
-						'style': 'width:10em',
-						'value': set.sfp_iface || 'sfp0',
+						'style': 'width:14em',
+						'value': set.sfp_iface || 'sfp0 lan1',
 						'change': function(ev) { return self.handleSetting('sfp_iface', ev.target.value); }
 					}),
-					E('div', { 'class': 'cbi-value-description' }, _('carrier 为 1 时 2.5G 光口灯亮。'))
+					E('div', { 'class': 'cbi-value-description' }, _('空格分隔多个 netdev；任一 carrier 为 1 时 2.5G 口灯亮。铜口 lan1 与光口 sfp0 共用这颗灯。'))
 				])
 			])
 		]);

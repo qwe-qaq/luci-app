@@ -130,7 +130,7 @@ make package/luci-app-pon-status/compile V=s
 | VPN | `green:vpn` | 配置的隧道接口 up 时亮 |
 | WLAN | `green:wlan` | 有终端关联时亮 |
 | USB / USB2 | `green:usb-1` / `green:usb-2` | 按链路速率分：USB2.0 侧（≤480M）/ SuperSpeed 侧（>480M） |
-| 2.5G 光口 | `green:2g5-fiber` | SFP 口 carrier |
+| 2.5G 光电复用口 | `green:2g5-fiber` | `sfp_iface` 列出的 netdev 任一 carrier（默认 `sfp0 lan1`，空格分隔） |
 | 语音 1–4 | `green:voice1..4` | 本机型 FXS 无 sysfs 状态源，默认不亮（不做假指示） |
 
 **为什么要在用户态做**：这块板是贴片 paged BOSA，没有 SFP EEPROM，数字 PON PHY 的 `SFP_STA` bit0 恒为 0，驱动据此算出的 `optical_signal` 恒为「有光」。于是 DTS 里即使绑了 `pon0-los` / `pon0-online`，红灯拔纤也不会亮、光纤灯也不闪。本包绕开那个假信号，直接读收光功率与注册态自己判断：优先取 debugfs 的
