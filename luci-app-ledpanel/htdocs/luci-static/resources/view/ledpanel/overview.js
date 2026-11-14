@@ -123,13 +123,14 @@ return view.extend({
 
 			return E('tr', { 'class': 'tr' }, [
 				E('td', { 'class': 'td' }, [
-					E('strong', {}, l.name),
+					/* 主标题用中文名（光信号 / 光纤 / 系统红…），跟原厂面板一致；
+					   内部代号、sysfs 目录、规则名收进悬停提示，需要对着 ubus 输出
+					   或 DTS 排查时再看得见，平时不占版面 */
+					E('strong', {
+						'title': '%s · %s · %s'.format(l.name, l.sysfs, l.rule)
+					}, l.label || l.name),
 					' ',
-					/* 脚位来自 PCA9555 实际走线，拿万用表对板子时按这个找；
-					   电源灯不在扩展器上，标 SoC */
-					E('span', { 'class': 'ifacebadge' }, (l.pin && l.pin !== '-') ? l.pin : 'SoC'),
-					E('br'),
-					E('span', { 'class': 'ifacebadge' }, l.sysfs)
+					E('span', { 'class': 'ifacebadge' }, (l.pin && l.pin !== '-') ? l.pin : 'SoC')
 				]),
 				E('td', { 'class': 'td' }, l.desc),
 				E('td', { 'class': 'td', 'data-state': l.name }, stateText(l)),

@@ -113,23 +113,46 @@ led_path() {
 }
 
 # 页面展示用的中文说明
+# 页面主标题。沿用原厂面板的措辞，用户看到的是"光信号""光纤"这些，
+# 不是 los/wan 这种内部代号；内部代号只在悬停提示里出现，方便对照 ubus 输出。
+led_label() {
+	case "$1" in
+		power)    echo "电源" ;;
+		los)      echo "光信号" ;;
+		wan)      echo "光纤" ;;
+		downlink) echo "下联 PON" ;;
+		sys)      echo "系统" ;;
+		sys_red)  echo "系统红" ;;
+		vpn)      echo "VPN" ;;
+		wlan)     echo "WLAN" ;;
+		usb)      echo "USB" ;;
+		usb2)     echo "USB2" ;;
+		sfp)      echo "2.5G 光口" ;;
+		voice1)   echo "语音 1" ;;
+		voice2)   echo "语音 2" ;;
+		voice3)   echo "语音 3" ;;
+		voice4)   echo "语音 4" ;;
+		*)        echo "" ;;
+	esac
+}
+
 led_desc() {
 	case "$1" in
-		power)    echo "电源指示，常亮" ;;
-		los)      echo "光信号：无光 1Hz 闪红，有光熄灭" ;;
-		wan)      echo "光纤：无光灭，有光未注册闪烁，O5 常亮" ;;
-		downlink) echo "下联 PON 口链路（本机型通常无对应 netdev）" ;;
-		sys)      echo "系统正常，常亮" ;;
-		sys_red)  echo "系统故障红色，默认灭" ;;
-		vpn)      echo "VPN 隧道接口 up 时亮" ;;
-		wlan)     echo "有无线终端关联时亮" ;;
+		power)    echo "常亮" ;;
+		los)      echo "无光时 1Hz 闪红，有光熄灭" ;;
+		wan)      echo "无光灭，有光未注册 1Hz 闪，O5 常亮" ;;
+		downlink) echo "下联口有载波时亮（本机型通常无对应 netdev）" ;;
+		sys)      echo "系统正常时常亮" ;;
+		sys_red)  echo "系统故障告警，默认灭" ;;
+		vpn)      echo "VPN 隧道 up 时亮" ;;
+		wlan)     echo "有终端关联时亮" ;;
 		usb)      echo "USB 总线有设备时亮" ;;
 		usb2)     echo "第二路 USB 指示" ;;
-		sfp)      echo "2.5G 光口 carrier" ;;
-		voice1)   echo "语音口 1（FXS 无状态源，默认灭）" ;;
-		voice2)   echo "语音口 2（FXS 无状态源，默认灭）" ;;
-		voice3)   echo "语音口 3（FXS 无状态源，默认灭）" ;;
-		voice4)   echo "语音口 4（FXS 无状态源，默认灭）" ;;
+		sfp)      echo "2.5G 光口有载波时亮" ;;
+		voice1)   echo "FXS 无状态源，默认灭" ;;
+		voice2)   echo "FXS 无状态源，默认灭" ;;
+		voice3)   echo "FXS 无状态源，默认灭" ;;
+		voice4)   echo "FXS 无状态源，默认灭" ;;
 		*)        echo "" ;;
 	esac
 }
@@ -403,7 +426,7 @@ case "$1" in
 			"$HAS_LIGHT" "$SYNC" "$REGISTERED" "$(field rx_power_dbm)" "$(field onu_state)"
 		;;
 	spec)
-		# name|sysfs|rule|说明|脚位，给 rpcd 后端和页面共用，避免两处映射漂移
+		# name|sysfs|rule|说明|脚位|中文名，给 rpcd 后端和页面共用，避免两处映射漂移
 		# sysfs 列给的是 led_path 解析后的真实目录名：DTS 把 label 改了，
 		# 这里会自动变成新名字，页面和后端不用知道原来的 label。
 		for _n in $LED_LIST; do
@@ -412,7 +435,7 @@ case "$1" in
 			[ -n "$1" ] || continue
 			_p=$(led_path "$1" "$3")
 			if [ -n "$_p" ]; then _s=${_p##*/}; else _s=$1; fi
-			printf '%s|%s|%s|%s|%s\n' "$_n" "$_s" "$2" "$(led_desc "$_n")" "$(pin_name "$3")"
+			printf '%s|%s|%s|%s|%s|%s\n' "$_n" "$_s" "$2" "$(led_desc "$_n")" "$(pin_name "$3")" "$(led_label "$_n")"
 		done
 		;;
 	*)

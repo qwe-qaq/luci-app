@@ -72,7 +72,7 @@ do_status() {
 	printf '"leds":['
 
 	_first=1
-	"$LEDPANELD" spec 2>/dev/null | while IFS='|' read -r _name _sysfs _rule _desc _pin; do
+	"$LEDPANELD" spec 2>/dev/null | while IFS='|' read -r _name _sysfs _rule _desc _pin _label; do
 		[ -n "$_name" ] || continue
 		_p="/sys/class/leds/$_sysfs"
 		_trig=$(sed -n 's/.*\[\([^]]*\)\].*/\1/p' "$_p/trigger" 2>/dev/null)
@@ -83,9 +83,9 @@ do_status() {
 		[ -n "$_mode" ] || _mode=auto
 		[ "$_first" = 1 ] || printf ','
 		_first=0
-		printf '{"name":"%s","sysfs":"%s","rule":"%s","desc":"%s","pin":"%s","mode":"%s","blink_ms":"%s","trigger":"%s","brightness":%s,"max":%s}' \
+		printf '{"name":"%s","sysfs":"%s","rule":"%s","desc":"%s","pin":"%s","label":"%s","mode":"%s","blink_ms":"%s","trigger":"%s","brightness":%s,"max":%s}' \
 			"$(json_str "$_name")" "$(json_str "$_sysfs")" "$(json_str "$_rule")" \
-			"$(json_str "$_desc")" "$(json_str "$_pin")" "$(json_str "$_mode")" "$(json_str "$_bms")" \
+			"$(json_str "$_desc")" "$(json_str "$_pin")" "$(json_str "$_label")" "$(json_str "$_mode")" "$(json_str "$_bms")" \
 			"$(json_str "$_trig")" "${_bright:-0}" "${_max:-1}"
 	done
 	printf ']}'
