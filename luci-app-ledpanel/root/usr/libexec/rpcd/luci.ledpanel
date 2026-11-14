@@ -9,8 +9,7 @@
 #   settings{key,value...}     改全局参数
 #   service {action}           start|stop|restart|enable|disable
 #
-# 灯名→sysfs 的映射只在 /usr/sbin/ledpaneld 里维护一份，
-# 这里通过 `ledpaneld spec` 取，避免两个文件各写一张表后漂移。
+# 灯名→sysfs 映射只在 ledpaneld 里维护一份，这里用 `ledpaneld spec` 取，避免漂移。
 
 LEDPANELD=/usr/sbin/ledpaneld
 RUN_DIR=/var/run/ledpanel
@@ -41,7 +40,7 @@ daemon_running() {
 	pgrep -f "$LEDPANELD start" >/dev/null 2>&1
 }
 
-# 改完 uci 立刻生效一次（守护在跑也会自己刷新，这里主要是给未运行的场景兜底）
+# 改完立刻应用一次，给守护未运行的场景兜底
 apply_now() {
 	"$LEDPANELD" once >/dev/null 2>&1
 }
@@ -129,7 +128,7 @@ do_test() {
 
 	mkdir -p "$RUN_DIR"
 	printf '%s %s\n' "$_act" "$(( $(date +%s) + _sec ))" > "$RUN_DIR/override.$_name"
-	# 立刻生效，不用等下一个 tick
+	# 不等下一个 tick
 	"$LEDPANELD" once >/dev/null 2>&1
 	printf '{"ok":true,"name":"%s","action":"%s","seconds":%s}' \
 		"$(json_str "$_name")" "$(json_str "$_act")" "$_sec"

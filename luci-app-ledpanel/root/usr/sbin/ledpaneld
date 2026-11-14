@@ -1,17 +1,14 @@
 #!/bin/sh
 # ledpaneld - AN4475-G2 面板指示灯策略守护
 #
-# 这块板 14 颗面板灯全挂在 PCA9555（i2c 2-0020）上，另有一颗电源灯在 SoC GPIO35。
-# DTS 里虽然给 red:los / green:wan-online 绑了 pon0-los / pon0-online 触发器，
-# 但本板是贴片 paged BOSA，没有 SFP EEPROM，数字 PON PHY 的 SFP_STA bit0 恒为 0，
-# 驱动据此算出的 optical_signal 恒为"有光"，两个触发器因此永远不动作。
-# 所以这里在用户态按原厂语义自己算，逐颗灯下发 brightness / timer 触发器。
+# 14 颗面板灯在 PCA9555(2-0020)，电源灯在 SoC GPIO35。DTS 曾绑 pon0-los /
+# pon0-online，但本板是贴片 paged BOSA、无 SFP EEPROM，驱动算出的 optical_signal
+# 恒为"有光"，两个触发器永不动作 —— 故在用户态按原厂语义重算。
 #
-# 语义（可用 /etc/config/ledpanel 逐颗改成 on / off / blink 覆盖）：
 #   red:los          无光 1Hz 闪；有光灭
-#   green:wan-online 无光灭；有光未注册 1Hz 闪；onu_state=O5 常亮
-#   其余灯          见 rule 说明，没有可靠状态源的（语音口、下联 PON）默认不点亮，
-#                   不做假指示
+#   green:wan-online 无光灭；有光未注册 1Hz 闪；O5 常亮
+#   其余             无可靠状态源的（语音口、下联 PON）默认不亮，不做假指示
+#   逐颗可用 /etc/config/ledpanel 覆盖成 on / off / blink
 
 # 路径可用环境变量覆盖，只为本机回归测试用；生产环境不要设置
 LED_ROOT=${LEDPANEL_LED_ROOT:-/sys/class/leds}
@@ -24,12 +21,9 @@ CONFIG=ledpanel
 # 顺序即页面里的展示顺序
 LED_LIST="power los wan downlink sys sys_red vpn wlan usb usb2 sfp voice1 voice2 voice3 voice4"
 
-# config_load / config_get 来自 /lib/functions.sh。用它而不是每颗灯每次 `uci get`：
-# 15 颗灯每秒 2~3 次 uci 调用就是 40 多个进程/秒，低端 CPU 扛不住。
-# config_load 只 spawn 一次 uci，之后 config_get 是纯 shell 函数。
-# 本机跑回归测试时没有这个文件，用 uci get 兜底一份同签名实现。
-# 注意：`if ! . file` 拦不住——非交互 shell 里 source 不存在的文件会直接终止脚本，
-# 所以必须先判断存在再 source。
+# 用 config_load（只 spawn 一次 uci）而非每颗灯每次 `uci get`：15 颗灯每秒
+# 40+ 进程，低端 CPU 扛不住。本机回归时没有这文件，用 uci get 兜底同签名实现。
+# 不能写 `if ! . file`：非交互 shell 里 source 不存在的文件会直接终止脚本。
 if [ -r /lib/functions.sh ]; then
 	. /lib/functions.sh
 else
@@ -46,14 +40,10 @@ log() {
 
 # 名字 -> "sysfs 规则名 脚位"
 #
-# 第三列是 PCA9555（i2c 2-0020，gpiochip576）上的实际脚位号：
-#   P0.0=0 … P0.7=7，P1.0=8 … P1.5=13，P1.6/P1.7 空。
-# 电源灯不在扩展器上，走 SoC GPIO35，记 -。
-#
-# 为什么记脚位：脚位是 PCB 走线，永远不会变；sysfs 名字只是 DTS 里的 label，
-# 上游改一次 DTS 这边就全断。label 定位失败时用脚位反查（led_path），
-# 页面也按脚位展示，拿万用表对着板子能直接对位。
-# 实测对应关系见 /sys/kernel/debug/gpio 的 2-0020 段。
+# 脚位是 PCA9555(2-0020) 的走线：P0.0=0 … P0.7=7，P1.0=8 … P1.5=13，
+# P1.6/P1.7 空；电源灯在 SoC GPIO35，记 -。脚位由 PCB 决定不会变，sysfs 名
+# 只是 DTS label —— 上游改名时按脚位反查（led_path），不用改代码。
+# 实测对应见 /sys/kernel/debug/gpio 的 2-0020 段。
 led_spec() {
 	case "$1" in
 		power)    echo "green:power always_on -" ;;
@@ -88,9 +78,9 @@ pin_name() {
 }
 
 # label 落成真实 sysfs 目录。
-# 常态直接命中 $LED_ROOT/<label>；命中不了说明 DTS 改了 label，
-# 这时按脚位去 debugfs 查这一脚当前被谁占着，改用那个名字，不用改代码。
-# 只匹配 2-0020 那一段：SoC 的 gpiochip 也有 0~15 这些号，混起来会串到别的灯。
+# 常态直接命中 $LED_ROOT/<label>；命中不了说明 DTS 改了 label，就按脚位去
+# debugfs 查这一脚当前被谁占着。只匹配 2-0020 段 —— SoC 的 gpiochip 也有
+# 0~15 这些号，不过滤会串到别的灯。
 led_path() {
 	_lbl=$1
 	_pin=$2
@@ -114,8 +104,7 @@ led_path() {
 }
 
 # 页面展示用的中文说明
-# 页面主标题。沿用原厂面板的措辞，用户看到的是"光信号""光纤"这些，
-# 不是 los/wan 这种内部代号；内部代号只在悬停提示里出现，方便对照 ubus 输出。
+# 页面主标题，沿用原厂面板措辞（"光信号""光纤"）；内部代号只出现在悬停提示里。
 led_label() {
 	case "$1" in
 		power)    echo "电源" ;;
@@ -158,8 +147,7 @@ led_desc() {
 	esac
 }
 
-# 从多行 key: value 文本里取第一个匹配 key 的值
-# busybox 的 sed 不支持 \b，用 awk 定位再切分
+# 从 "key: value" 多行文本取第一个匹配值。busybox sed 不支持 \b，用 awk 定位。
 field() {
 	printf '%s\n' "$ST" | awk -v k="$1" '
 		index($0, k) == 0 { next }
@@ -179,9 +167,8 @@ num_gt() {
 	awk -v a="$1" -v b="$2" 'BEGIN { exit !(a + 0 > b + 0) }'
 }
 
-# 8472 的收光寄存器是 be16、单位 0.1 µW：dBm = 10*log10(raw) - 40（raw 32 ≈ -25 dBm）。
-# 内核 debugfs 只给原始值，这里自己换算；raw=0 表示无光，直接给 -40。
-# 不用 strtonum（busybox awk 没有），手写十六进制累加。
+# 8472 收光寄存器 be16、单位 0.1 µW：dBm = 10*log10(raw) - 40（raw 32 ≈ -25 dBm，
+# raw 0 视为无光）。busybox awk 无 strtonum，手写十六进制累加。
 rx_dbm_from_raw() {
 	awk -v v="$1" 'BEGIN {
 		h = tolower(v); sub(/^0x/, "", h)
@@ -203,10 +190,9 @@ collect_state() {
 	if [ -r "$_f" ]; then
 		ST=$(cat "$_f" 2>/dev/null)
 	elif [ -r "$PON_DBG/frontend" ]; then
-		# 当前内核没有汇总的 status，而是按功能拆成几个文件，字段格式一样
-		# （"key: value"），拼起来即可：rx_power_8472 在 frontend、onu_state 在
-		# registration、optical_signal 在 line、xgtc_sync 在 pcs。
-		# 优先走这条路：省掉每秒 fork 一次 ponctl，也不依赖 airoha-ponctl 装没装。
+		# 内核没有汇总的 status，按功能拆成 frontend/registration/line/pcs，
+		# 字段格式一致直接拼：rx_power_8472 在 frontend、onu_state 在 registration、
+		# optical_signal 在 line、xgtc_sync 在 pcs。比每秒 fork 一次 ponctl 省。
 		ST=$(cat "$PON_DBG/frontend" "$PON_DBG/registration" \
 			  "$PON_DBG/line" "$PON_DBG/pcs" 2>/dev/null)
 	elif command -v ponctl >/dev/null 2>&1; then
@@ -271,9 +257,9 @@ wlan_stations() {
 	any_iface_up "$WLAN_IFACE"
 }
 
-# $1 缺省=任意设备；usb2=只看 USB2.0 侧（480M 及以下）；usb3=只看 SuperSpeed 侧。
-# 本板实际只有 1fad0000 这一个 xhci 控制器在跑，它同时挂在 usb1(480M) 和 usb2(20G)
-# 两条根 hub 上，两个面板灯因此不能按总线号分，只能按设备协商速率分。
+# $1 缺省=任意设备；usb2=USB2.0 侧（≤480M）；usb3=SuperSpeed 侧。
+# 本板只有 1fad0000 一个 xhci，同时挂 usb1(480M) 与 usb2(20G) 两条根 hub，
+# 按总线号分不开，只能按协商速率分。
 usb_present() {
 	for _d in "$USB_ROOT"/*-*; do
 		[ -d "$_d" ] || continue
@@ -330,8 +316,8 @@ rule_state() {
 	esac
 }
 
-# 只在目标状态变化时才写 sysfs：timer 触发器每写一次都会把闪烁相位打回起点
-# $2 是 led_path 解析出来的真实目录，不是 label —— 目录不存在就什么都不做
+# 只在目标变化时写 sysfs：timer 触发器每写一次都把闪烁相位打回起点。
+# $2 是 led_path 解析出的真实目录，不是 label；目录不存在就跳过。
 apply_led() {
 	_name=$1; _p=$2; _want=$3
 	[ -n "$_p" ] && [ -d "$_p" ] || return 0
@@ -339,12 +325,9 @@ apply_led() {
 	_cache="$RUN_DIR/$_name"
 	_prev=$(cat "$_cache" 2>/dev/null)
 
-	# 缓存只证明"我上次想设成什么"，不证明"现在还是这个状态"。
-	# /etc/init.d/led（START=96）会按 uci 里的 sysfs 重新绑 netdev 触发器，
-	# 手动 echo 也能改；只比对缓存的话，这种外部改动会被永远忽略，
-	# 灯就停在别人设的状态上（实测 wlan 灯被 uci 抢走后一直回不来）。
-	# 所以缓存命中时再核一次 trigger 名：on/off 要 none，闪烁要 timer。
-	# 用 read 内建读，不 fork 进程；brightness 不核 —— timer 闪烁时它自己在变。
+	# 缓存只证明"我上次想设什么"，不证明"现在还是"。/etc/init.d/led(START=96)
+	# 会按 uci 重绑 netdev，手动 echo 也能改；只比缓存的话外部改动被永久忽略
+	# （实测 wlan 灯被抢走后回不来）。故命中时再核 trigger 名，用 read 不 fork。
 	_need=none
 	case "$_want" in blink:*) _need=timer ;; esac
 	if [ "$_prev" = "$_want" ]; then
@@ -440,9 +423,8 @@ tick() {
 }
 
 stop_apply() {
-	# 守护退出时把灯收干净：业务灯全灭，只留电源与系统灯亮着（设备带电的常规表现）。
-	# 不写回 DTS 的 default-trigger —— 那些触发器在本板本来就不动作，
-	# 回写只会让灯停在"有光"的假状态上。
+	# 退出时业务灯全灭，只留电源与系统灯。不回写 DTS 的 default-trigger ——
+	# 那些触发器在本板不动作，回写只会让灯停在"有光"的假状态上。
 	for _n in $LED_LIST; do
 		# shellcheck disable=SC2046
 		set -- $(led_spec "$_n")
@@ -482,9 +464,8 @@ case "$1" in
 			"$HAS_LIGHT" "$SYNC" "$REGISTERED" "$(field rx_power_dbm)" "$(field onu_state)"
 		;;
 	spec)
-		# name|sysfs|rule|说明|脚位|中文名，给 rpcd 后端和页面共用，避免两处映射漂移
-		# sysfs 列给的是 led_path 解析后的真实目录名：DTS 把 label 改了，
-		# 这里会自动变成新名字，页面和后端不用知道原来的 label。
+		# name|sysfs|rule|说明|脚位|中文名，rpcd 后端与页面共用，避免映射漂移。
+		# sysfs 是 led_path 解析后的真实目录名，DTS 改 label 时自动跟随。
 		for _n in $LED_LIST; do
 			# shellcheck disable=SC2046
 			set -- $(led_spec "$_n")

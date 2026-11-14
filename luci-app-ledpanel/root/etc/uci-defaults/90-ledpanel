@@ -1,16 +1,13 @@
 #!/bin/sh
-# 首次安装/首次启动时启用开机自启。/etc/config/ledpanel 由包本身提供，这里只挂 rc.d。
-# 不在 uci-defaults 里直接 start：这个脚本在 boot 阶段先于 rc.d 执行，
-# 交给 S99ledpaneld 统一拉起才不会和 /etc/init.d/led 抢时序。
+# 只挂开机自启，不直接 start：本脚本在 boot 阶段先于 rc.d 执行，
+# 交给 S99ledpaneld 拉起才不会和 /etc/init.d/led 抢时序。
 
 [ -n "$IPKG_INSTROOT" ] && exit 0
 
 /etc/init.d/ledpaneld enable
 
-# rpcd 只在启动时扫描一遍 /usr/libexec/rpcd，装包前它已经跑起来了，
-# 不重启就不会注册 luci.ledpanel，页面会报
-#   RPC call to luci.ledpanel/status failed with error -32000: Object not found
-# boot 阶段 rpcd 往往还没起（pidof 失败），那种情况交给 rpcd 自己启动时扫描，跳过。
+# rpcd 只在启动时扫一次 /usr/libexec/rpcd。装包时它已运行，不重启就不会注册
+# luci.ledpanel，页面报 -32000 Object not found。boot 阶段 rpcd 通常还没起。
 if pidof rpcd >/dev/null 2>&1; then
 	ubus list 2>/dev/null | grep -qx "luci.ledpanel" || /etc/init.d/rpcd restart >/dev/null 2>&1
 fi
