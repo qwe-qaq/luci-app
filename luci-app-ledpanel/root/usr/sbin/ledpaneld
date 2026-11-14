@@ -204,7 +204,13 @@ collect_state() {
 		ST=$(ponctl --device "$PON_DEV" status 2>/dev/null)
 	fi
 
-	# 收光功率优先；拿不到就退回驱动自己的 optical_signal
+	# 收光功率优先；没有功率读数时只能看 PCS。
+	#
+	# 本板 optical_signal / signal_detected / rx_active 三个都恒为 1：贴片 paged
+	# BOSA 没有 EEPROM，LOS 检测引脚悬空，拔掉光纤照样报"有光"，dmesg 于是刷
+	# "optical signal present without XGTC sync" 并无限重启 RX。所以它们不能
+	# 当作有光证据。无光时 PCS 必然锁不住接收频率，改用 freqdet_locked：
+	# 代价只是会漏报（有光但频率没锁上时显示无光），不会把断纤显示成有光。
 	_rx=$(field rx_power_dbm)
 	[ -n "$_rx" ] || _rx=$(rx_dbm_from_raw "$(field rx_power_8472)")
 	if [ -n "$_rx" ]; then
@@ -214,7 +220,7 @@ collect_state() {
 			HAS_LIGHT=0
 		fi
 	else
-		case "$(field optical_signal)" in
+		case "$(field freqdet_locked)" in
 			1|true|yes) HAS_LIGHT=1 ;;
 			*)          HAS_LIGHT=0 ;;
 		esac
