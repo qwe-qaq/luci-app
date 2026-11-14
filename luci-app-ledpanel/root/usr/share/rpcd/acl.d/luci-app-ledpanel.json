@@ -1,0 +1,15 @@
+{
+	"luci-app-ledpanel": {
+		"description": "面板 LED 控制（PCA9555）",
+		"read": {
+			"ubus": {
+				"luci.ledpanel": [ "status" ]
+			}
+		},
+		"write": {
+			"ubus": {
+				"luci.ledpanel": [ "set", "test", "all", "settings", "service" ]
+			}
+		}
+	}
+}

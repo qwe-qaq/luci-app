@@ -1,0 +1,27 @@
+#!/bin/sh /etc/rc.common
+# 面板 LED 策略守护。START=99 放在 /etc/init.d/led 之后，
+# 否则 gpio-leds 的默认触发器会把我们刚写好的状态顶回去。
+
+START=99
+STOP=10
+USE_PROCD=1
+
+PROG=/usr/sbin/ledpaneld
+
+start_service() {
+	procd_open_instance
+	procd_set_param command "$PROG" start
+	procd_set_param respawn 3600 5 5
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_close_instance
+}
+
+service_triggers() {
+	procd_add_reload_trigger "ledpanel"
+}
+
+reload_service() {
+	stop
+	start
+}

@@ -1,0 +1,197 @@
+#!/bin/sh
+# 面板 LED（PCA9555）LuCI 后端
+#
+# 方法：
+#   status                     灯列表 + 当前 uci 模式 + PON 实时状态
+#   set     {name,mode[,blink_ms]}  改单颗灯的模式（auto/on/off/blink），持久化到 uci
+#   test    {name,action[,seconds]} 临时试亮/试灭/试闪，到点自动恢复配置
+#   all     {action}           on|off|auto，批量改模式
+#   settings{key,value...}     改全局参数
+#   service {action}           start|stop|restart|enable|disable
+#
+# 灯名→sysfs 的映射只在 /usr/sbin/ledpaneld 里维护一份，
+# 这里通过 `ledpaneld spec` 取，避免两个文件各写一张表后漂移。
+
+LEDPANELD=/usr/sbin/ledpaneld
+RUN_DIR=/var/run/ledpanel
+CONFIG=ledpanel
+
+json_str() {
+	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+# 允许修改的全局参数（白名单，避免页面写进任意 uci 键）
+settings_allowed() {
+	case "$1" in
+		enabled|interval|pon_device|los_rx_threshold|blink_ms|\
+		vpn_iface|wlan_iface|sfp_iface|downlink_iface|voice_cmd) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+led_exists() {
+	[ -n "$1" ] && "$LEDPANELD" spec 2>/dev/null | cut -d'|' -f1 | grep -qx "$1"
+}
+
+mode_ok() {
+	case "$1" in auto|on|off|blink) return 0 ;; *) return 1 ;; esac
+}
+
+daemon_running() {
+	pgrep -f "$LEDPANELD start" >/dev/null 2>&1
+}
+
+# 改完 uci 立刻生效一次（守护在跑也会自己刷新，这里主要是给未运行的场景兜底）
+apply_now() {
+	"$LEDPANELD" once >/dev/null 2>&1
+}
+
+do_status() {
+	_running=0
+	daemon_running && _running=1
+
+	_st=$("$LEDPANELD" state 2>/dev/null)
+	_light=$(printf '%s' "$_st" | sed -n 's/.*light=\([^ ]*\).*/\1/p')
+	_sync=$(printf '%s' "$_st" | sed -n 's/.*sync=\([^ ]*\).*/\1/p')
+	_reg=$(printf '%s' "$_st" | sed -n 's/.*registered=\([^ ]*\).*/\1/p')
+	_rx=$(printf '%s' "$_st" | sed -n 's/.*rx=\([^ ]*\).*/\1/p')
+	_onu=$(printf '%s' "$_st" | sed -n 's/.*onu=\([^ ]*\).*/\1/p')
+
+	printf '{"running":%s,' "$_running"
+	printf '"pon":{"light":%s,"sync":%s,"registered":%s,"rx":"%s","onu":"%s"},' \
+		"${_light:-0}" "${_sync:-0}" "${_reg:-0}" "$(json_str "$_rx")" "$(json_str "$_onu")"
+	printf '"settings":{'
+	_first=1
+	for _k in enabled interval pon_device los_rx_threshold blink_ms vpn_iface wlan_iface sfp_iface downlink_iface voice_cmd; do
+		_v=$(uci -q get "$CONFIG.settings.$_k" 2>/dev/null)
+		[ "$_first" = 1 ] || printf ','
+		_first=0
+		printf '"%s":"%s"' "$_k" "$(json_str "$_v")"
+	done
+	printf '},'
+	printf '"leds":['
+
+	_first=1
+	"$LEDPANELD" spec 2>/dev/null | while IFS='|' read -r _name _sysfs _rule _desc; do
+		[ -n "$_name" ] || continue
+		_p="/sys/class/leds/$_sysfs"
+		_trig=$(sed -n 's/.*\[\([^]]*\)\].*/\1/p' "$_p/trigger" 2>/dev/null)
+		_bright=$(cat "$_p/brightness" 2>/dev/null)
+		_max=$(cat "$_p/max_brightness" 2>/dev/null)
+		_mode=$(uci -q get "$CONFIG.$_name.mode" 2>/dev/null)
+		_bms=$(uci -q get "$CONFIG.$_name.blink_ms" 2>/dev/null)
+		[ -n "$_mode" ] || _mode=auto
+		[ "$_first" = 1 ] || printf ','
+		_first=0
+		printf '{"name":"%s","sysfs":"%s","rule":"%s","desc":"%s","mode":"%s","blink_ms":"%s","trigger":"%s","brightness":%s,"max":%s}' \
+			"$(json_str "$_name")" "$(json_str "$_sysfs")" "$(json_str "$_rule")" \
+			"$(json_str "$_desc")" "$(json_str "$_mode")" "$(json_str "$_bms")" \
+			"$(json_str "$_trig")" "${_bright:-0}" "${_max:-1}"
+	done
+	printf ']}'
+}
+
+do_set() {
+	_name=$(printf '%s' "$1" | jsonfilter -e '@.name' 2>/dev/null)
+	_mode=$(printf '%s' "$1" | jsonfilter -e '@.mode' 2>/dev/null)
+	_bms=$(printf '%s' "$1" | jsonfilter -e '@.blink_ms' 2>/dev/null)
+
+	led_exists "$_name" || { echo '{"ok":false,"error":"未知灯名"}'; return; }
+	mode_ok "$_mode" || { echo '{"ok":false,"error":"mode 只能是 auto/on/off/blink"}'; return; }
+
+	uci -q set "$CONFIG.$_name.mode=$_mode"
+	case "$_bms" in
+		''|*[!0-9]*) ;;
+		*) uci -q set "$CONFIG.$_name.blink_ms=$_bms" ;;
+	esac
+	uci -q commit "$CONFIG"
+
+	rm -f "$RUN_DIR/override.$_name" 2>/dev/null
+	apply_now
+	printf '{"ok":true,"name":"%s","mode":"%s"}' "$(json_str "$_name")" "$(json_str "$_mode")"
+}
+
+do_test() {
+	_name=$(printf '%s' "$1" | jsonfilter -e '@.name' 2>/dev/null)
+	_act=$(printf '%s' "$1" | jsonfilter -e '@.action' 2>/dev/null)
+	_sec=$(printf '%s' "$1" | jsonfilter -e '@.seconds' 2>/dev/null)
+
+	led_exists "$_name" || { echo '{"ok":false,"error":"未知灯名"}'; return; }
+	mode_ok "$_act" || { echo '{"ok":false,"error":"action 只能是 auto/on/off/blink"}'; return; }
+
+	case "$_sec" in ''|*[!0-9]*) _sec=5 ;; esac
+	[ "$_sec" -gt 60 ] 2>/dev/null && _sec=60
+
+	if ! daemon_running; then
+		echo '{"ok":false,"error":"守护未运行，试亮不会持续。请先启动服务"}'
+		return
+	fi
+
+	mkdir -p "$RUN_DIR"
+	printf '%s %s\n' "$_act" "$(( $(date +%s) + _sec ))" > "$RUN_DIR/override.$_name"
+	# 立刻生效，不用等下一个 tick
+	"$LEDPANELD" once >/dev/null 2>&1
+	printf '{"ok":true,"name":"%s","action":"%s","seconds":%s}' \
+		"$(json_str "$_name")" "$(json_str "$_act")" "$_sec"
+}
+
+do_all() {
+	_act=$(printf '%s' "$1" | jsonfilter -e '@.action' 2>/dev/null)
+	case "$_act" in
+		on|off|auto) ;;
+		*) echo '{"ok":false,"error":"action 只能是 on/off/auto"}'; return ;;
+	esac
+
+	"$LEDPANELD" spec 2>/dev/null | cut -d'|' -f1 | while read -r _name; do
+		[ -n "$_name" ] || continue
+		uci -q set "$CONFIG.$_name.mode=$_act"
+		rm -f "$RUN_DIR/override.$_name" 2>/dev/null
+	done
+	uci -q commit "$CONFIG"
+	apply_now
+	printf '{"ok":true,"action":"%s"}' "$_act"
+}
+
+do_settings() {
+	# 输入里除 key 之外的字段都当作要写入的值
+	_key=$(printf '%s' "$1" | jsonfilter -e '@.key' 2>/dev/null)
+	settings_allowed "$_key" || { echo '{"ok":false,"error":"不允许修改该参数"}'; return; }
+	_val=$(printf '%s' "$1" | jsonfilter -e '@.value' 2>/dev/null)
+
+	uci -q set "$CONFIG.settings.$_key=$_val"
+	uci -q commit "$CONFIG"
+	apply_now
+	printf '{"ok":true,"key":"%s","value":"%s"}' "$(json_str "$_key")" "$(json_str "$_val")"
+}
+
+do_service() {
+	_act=$(printf '%s' "$1" | jsonfilter -e '@.action' 2>/dev/null)
+	case "$_act" in
+		start|stop|restart|enable|disable) ;;
+		*) echo '{"ok":false,"error":"action 只能是 start/stop/restart/enable/disable"}'; return ;;
+	esac
+
+	/etc/init.d/ledpaneld "$_act" >/dev/null 2>&1
+	printf '{"ok":true,"action":"%s","running":%s}' "$_act" "$(daemon_running && echo 1 || echo 0)"
+}
+
+case "$1" in
+	list)
+		echo '{"status":{},"set":{"name":"str","mode":"str","blink_ms":"str"},"test":{"name":"str","action":"str","seconds":"str"},"all":{"action":"str"},"settings":{"key":"str","value":"str"},"service":{"action":"str"}}'
+		;;
+	call)
+		read -r input
+		case "$2" in
+			status)   do_status ;;
+			set)      do_set "$input" ;;
+			test)     do_test "$input" ;;
+			all)      do_all "$input" ;;
+			settings) do_settings "$input" ;;
+			service)  do_service "$input" ;;
+			*)        echo '{"ok":false,"error":"unknown method"}' ;;
+		esac
+		;;
+	*)
+		echo '{"ok":false,"error":"usage: luci.ledpanel list|call"}'
+		;;
+esac

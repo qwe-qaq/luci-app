@@ -1,0 +1,342 @@
+#!/bin/sh
+# ledpaneld - AN4475-G2 面板指示灯策略守护
+#
+# 这块板 14 颗面板灯全挂在 PCA9555（i2c 2-0020）上，另有一颗电源灯在 SoC GPIO35。
+# DTS 里虽然给 red:los / green:wan-online 绑了 pon0-los / pon0-online 触发器，
+# 但本板是贴片 paged BOSA，没有 SFP EEPROM，数字 PON PHY 的 SFP_STA bit0 恒为 0，
+# 驱动据此算出的 optical_signal 恒为"有光"，两个触发器因此永远不动作。
+# 所以这里在用户态按原厂语义自己算，逐颗灯下发 brightness / timer 触发器。
+#
+# 语义（可用 /etc/config/ledpanel 逐颗改成 on / off / blink 覆盖）：
+#   red:los          无光 1Hz 闪；有光灭
+#   green:wan-online 无光灭；有光未注册 1Hz 闪；onu_state=O5 常亮
+#   其余灯          见 rule 说明，没有可靠状态源的（语音口、下联 PON）默认不点亮，
+#                   不做假指示
+
+# 路径可用环境变量覆盖，只为本机回归测试用；生产环境不要设置
+LED_ROOT=${LEDPANEL_LED_ROOT:-/sys/class/leds}
+RUN_DIR=${LEDPANEL_RUN_DIR:-/var/run/ledpanel}
+PON_DBG_OVERRIDE=${LEDPANEL_PON_DBG:-}
+CONFIG=ledpanel
+
+# 顺序即页面里的展示顺序
+LED_LIST="power los wan downlink sys sys_red vpn wlan usb usb2 sfp voice1 voice2 voice3 voice4"
+
+log() {
+	logger -t ledpaneld "$*" 2>/dev/null
+}
+
+# uci 取值；缺失时回退到默认值
+opt() {
+	_v=$(uci -q get "$CONFIG.$1.$2" 2>/dev/null)
+	[ -n "$_v" ] || _v="$3"
+	printf '%s' "$_v"
+}
+
+# 名字 -> "sysfs 规则名"
+led_spec() {
+	case "$1" in
+		power)    echo "green:power always_on" ;;
+		los)      echo "red:los pon_los" ;;
+		wan)      echo "green:wan-online pon_wan" ;;
+		downlink) echo "green:pon-downlink pon_downlink" ;;
+		sys)      echo "green:sys always_on" ;;
+		sys_red)  echo "red:sys always_off" ;;
+		vpn)      echo "green:vpn vpn_up" ;;
+		wlan)     echo "green:wlan wlan_sta" ;;
+		usb)      echo "green:usb usb_present" ;;
+		usb2)     echo "green:usb2 usb_present" ;;
+		sfp)      echo "green:2g5-fiber sfp_link" ;;
+		voice1)   echo "green:voice1 voice_hook" ;;
+		voice2)   echo "green:voice2 voice_hook" ;;
+		voice3)   echo "green:voice3 voice_hook" ;;
+		voice4)   echo "green:voice4 voice_hook" ;;
+		*)        echo "" ;;
+	esac
+}
+
+# 页面展示用的中文说明
+led_desc() {
+	case "$1" in
+		power)    echo "电源指示，常亮" ;;
+		los)      echo "光信号：无光 1Hz 闪红，有光熄灭" ;;
+		wan)      echo "光纤：无光灭，有光未注册闪烁，O5 常亮" ;;
+		downlink) echo "下联 PON 口链路（本机型通常无对应 netdev）" ;;
+		sys)      echo "系统正常，常亮" ;;
+		sys_red)  echo "系统故障红色，默认灭" ;;
+		vpn)      echo "VPN 隧道接口 up 时亮" ;;
+		wlan)     echo "有无线终端关联时亮" ;;
+		usb)      echo "USB 总线有设备时亮" ;;
+		usb2)     echo "第二路 USB 指示" ;;
+		sfp)      echo "2.5G 光口 carrier" ;;
+		voice1)   echo "语音口 1（FXS 无状态源，默认灭）" ;;
+		voice2)   echo "语音口 2（FXS 无状态源，默认灭）" ;;
+		voice3)   echo "语音口 3（FXS 无状态源，默认灭）" ;;
+		voice4)   echo "语音口 4（FXS 无状态源，默认灭）" ;;
+		*)        echo "" ;;
+	esac
+}
+
+# 从多行 key: value 文本里取第一个匹配 key 的值
+# busybox 的 sed 不支持 \b，用 awk 定位再切分
+field() {
+	printf '%s\n' "$ST" | awk -v k="$1" '
+		index($0, k) == 0 { next }
+		{
+			rest = substr($0, index($0, k) + length(k))
+			sub(/^[ \t]*/, "", rest)		# 允许 key 与分隔符之间有空格
+			c = substr(rest, 1, 1)
+			if (c != ":" && c != "=") next
+			sub(/^[:=][ \t]*/, "", rest)
+			if (match(rest, /^[^ \t]+/))
+				print substr(rest, RSTART, RLENGTH)
+			exit
+		}'
+}
+
+num_gt() {
+	awk -v a="$1" -v b="$2" 'BEGIN { exit !(a + 0 > b + 0) }'
+}
+
+collect_state() {
+	ST=""
+	_f="$PON_DBG/status"
+	if [ -r "$_f" ]; then
+		ST=$(cat "$_f" 2>/dev/null)
+	elif command -v ponctl >/dev/null 2>&1; then
+		ST=$(ponctl --device "$PON_DEV" status 2>/dev/null)
+	fi
+
+	# 收光功率优先；拿不到就退回驱动自己的 optical_signal
+	_rx=$(field rx_power_dbm)
+	if [ -n "$_rx" ]; then
+		if num_gt "$_rx" "$LOS_RX"; then
+			HAS_LIGHT=1
+		else
+			HAS_LIGHT=0
+		fi
+	else
+		case "$(field optical_signal)" in
+			1|true|yes) HAS_LIGHT=1 ;;
+			*)          HAS_LIGHT=0 ;;
+		esac
+	fi
+
+	_sync=$(field xgtc_sync)
+	case "$_sync" in
+		sync|locked|ok) SYNC=1 ;;
+		*)              SYNC=0 ;;
+	esac
+
+	_onu=$(field onu_state)
+	case "$_onu" in
+		O5|o5) REGISTERED=1 ;;
+		*)     REGISTERED=0 ;;
+	esac
+}
+
+netdev_up() {
+	[ -n "$1" ] || return 1
+	[ "$(cat "/sys/class/net/$1/operstate" 2>/dev/null)" = up ]
+}
+
+carrier_on() {
+	[ -n "$1" ] || return 1
+	[ "$(cat /sys/class/net/"$1"/carrier 2>/dev/null)" = 1 ]
+}
+
+any_iface_up() {
+	for _i in $1; do
+		netdev_up "$_i" && return 0
+	done
+	return 1
+}
+
+wlan_stations() {
+	# 有 iw 就数关联终端；没有就退回接口是否 up
+	if command -v iw >/dev/null 2>&1; then
+		for _i in $WLAN_IFACE; do
+			_n=$(iw dev "$_i" station dump 2>/dev/null | grep -c '^Station')
+			[ "$_n" -gt 0 ] 2>/dev/null && return 0
+		done
+		return 1
+	fi
+	any_iface_up "$WLAN_IFACE"
+}
+
+usb_present() {
+	for _d in /sys/bus/usb/devices/*-*; do
+		[ -d "$_d" ] || continue
+		# 排除接口节点（形如 1-1:1.0 / 2-1.2:1.0），只要设备节点
+		case "${_d##*/}" in
+			*:*) continue ;;
+		esac
+		return 0
+	done
+	return 1
+}
+
+voice_hook() {
+	# 本机型 FXS 没有 sysfs 状态源。留一个外部命令钩子，未配置时视为未摘机。
+	[ -n "$1" ] || return 1
+	sh -c "$1" >/dev/null 2>&1
+}
+
+# 规则 -> on / off / blink:<ms>
+rule_state() {
+	case "$1" in
+		always_on)  echo on ;;
+		always_off) echo off ;;
+		pon_los)
+			if [ "$HAS_LIGHT" = 1 ]; then echo off; else echo "blink:$BLINK_MS"; fi ;;
+		pon_wan)
+			if [ "$REGISTERED" = 1 ]; then
+				echo on
+			elif [ "$HAS_LIGHT" = 1 ]; then
+				echo "blink:$BLINK_MS"
+			else
+				echo off
+			fi ;;
+		pon_downlink)
+			# FTTR 下联口，本机型没有对应 netdev 时保持熄灭
+			if [ -n "$DOWNLINK_IFACE" ] && carrier_on "$DOWNLINK_IFACE"; then echo on; else echo off; fi ;;
+		vpn_up)
+			if any_iface_up "$VPN_IFACE"; then echo on; else echo off; fi ;;
+		wlan_sta)
+			if wlan_stations; then echo on; else echo off; fi ;;
+		usb_present)
+			if usb_present; then echo on; else echo off; fi ;;
+		sfp_link)
+			if carrier_on "$SFP_IFACE"; then echo on; else echo off; fi ;;
+		voice_hook)
+			if voice_hook "$VOICE_CMD"; then echo on; else echo off; fi ;;
+		*) echo off ;;
+	esac
+}
+
+# 只在目标状态变化时才写 sysfs：timer 触发器每写一次都会把闪烁相位打回起点
+apply_led() {
+	_name=$1; _sys=$2; _want=$3
+	_p="$LED_ROOT/$_sys"
+	[ -d "$_p" ] || return 0
+
+	_cache="$RUN_DIR/$_name"
+	_prev=$(cat "$_cache" 2>/dev/null)
+	[ "$_prev" = "$_want" ] && return 0
+
+	case "$_want" in
+		on)
+			echo none > "$_p/trigger" 2>/dev/null
+			echo "$(cat "$_p/max_brightness" 2>/dev/null || echo 1)" > "$_p/brightness" 2>/dev/null
+			;;
+		off)
+			echo none > "$_p/trigger" 2>/dev/null
+			echo 0 > "$_p/brightness" 2>/dev/null
+			;;
+		blink:*)
+			_d=${_want#blink:}
+			echo timer > "$_p/trigger" 2>/dev/null
+			echo "$_d" > "$_p/delay_on" 2>/dev/null
+			echo "$_d" > "$_p/delay_off" 2>/dev/null
+			;;
+	esac
+
+	printf '%s' "$_want" > "$_cache"
+}
+
+load_config() {
+	ENABLED=$(opt settings enabled 1)
+	INTERVAL=$(opt settings interval 1)
+	PON_DEV=$(opt settings pon_device pon0)
+	LOS_RX=$(opt settings los_rx_threshold -25)
+	BLINK_MS=$(opt settings blink_ms 500)
+	VPN_IFACE=$(opt settings vpn_iface "")
+	WLAN_IFACE=$(opt settings wlan_iface "")
+	SFP_IFACE=$(opt settings sfp_iface sfp0)
+	DOWNLINK_IFACE=$(opt settings downlink_iface "")
+	VOICE_CMD=$(opt settings voice_cmd "")
+	PON_DBG=${PON_DBG_OVERRIDE:-/sys/kernel/debug/airoha-xpon-$PON_DEV}
+}
+
+tick() {
+	load_config
+	collect_state
+	NOW=$(date +%s)
+	for _n in $LED_LIST; do
+		# shellcheck disable=SC2046  # led_spec 返回两个词，需要按词拆
+		set -- $(led_spec "$_n")
+		[ -n "$1" ] || continue
+		_sys=$1
+		_rule=$2
+		_mode=$(opt "$_n" mode auto)
+
+		# 页面上的「试亮 N 秒」写 override 文件，到点自动失效回到配置
+		_ov="$RUN_DIR/override.$_n"
+		if [ -f "$_ov" ]; then
+			read -r _omode _oexp < "$_ov" 2>/dev/null
+			if [ -n "$_oexp" ] && [ "$NOW" -lt "$_oexp" ] 2>/dev/null; then
+				_mode=$_omode
+			else
+				rm -f "$_ov"
+			fi
+		fi
+
+		case "$_mode" in
+			on)    _want=on ;;
+			off)   _want=off ;;
+			blink) _want="blink:$(opt "$_n" blink_ms "$BLINK_MS")" ;;
+			*)     _want=$(rule_state "$_rule") ;;
+		esac
+
+		apply_led "$_n" "$_sys" "$_want"
+	done
+}
+
+stop_apply() {
+	# 退出前把灯交还内核默认（DTS 的 linux,default-trigger）
+	for _n in $LED_LIST; do
+		# shellcheck disable=SC2046
+		set -- $(led_spec "$_n")
+		[ -n "$1" ] || continue
+		printf 'none' > "$LED_ROOT/$1/trigger" 2>/dev/null
+	done
+	rm -f "$RUN_DIR"/* 2>/dev/null
+}
+
+mkdir -p "$RUN_DIR"
+
+case "$1" in
+	start|"")
+		load_config
+		log "启动，间隔 ${INTERVAL}s，阈值 ${LOS_RX} dBm"
+		trap 'stop_apply; exit 0' TERM INT
+		while :; do
+			tick
+			sleep "$INTERVAL"
+		done
+		;;
+	once)
+		# 单次应用，行为与守护主循环完全一致（含 override），页面改完配置立刻生效
+		tick
+		;;
+	state)
+		# 给页面看的一次性状态输出
+		load_config
+		collect_state
+		printf 'light=%s sync=%s registered=%s rx=%s onu=%s\n' \
+			"$HAS_LIGHT" "$SYNC" "$REGISTERED" "$(field rx_power_dbm)" "$(field onu_state)"
+		;;
+	spec)
+		# name|sysfs|rule|说明，给 rpcd 后端和页面共用，避免两处映射漂移
+		for _n in $LED_LIST; do
+			# shellcheck disable=SC2046
+			set -- $(led_spec "$_n")
+			[ -n "$1" ] || continue
+			printf '%s|%s|%s|%s\n' "$_n" "$1" "$2" "$(led_desc "$_n")"
+		done
+		;;
+	*)
+		echo "usage: ledpaneld [start|once|state|spec]" >&2
+		exit 1
+		;;
+esac

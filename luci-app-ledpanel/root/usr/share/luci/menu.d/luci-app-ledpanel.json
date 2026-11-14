@@ -1,0 +1,13 @@
+{
+	"admin/system/ledpanel": {
+		"title": "面板 LED",
+		"order": 60,
+		"action": {
+			"type": "view",
+			"path": "ledpanel/overview"
+		},
+		"depends": {
+			"acl": [ "luci-app-ledpanel" ]
+		}
+	}
+}

@@ -9,6 +9,7 @@
 | `luci-app-natmode` | 0.1.6-r1 | NAT 类型三选一：全锥形 / 受限 / 对称 | 网络 → NAT 类型 | `firewall4`、`kmod-nft-fullcone` |
 | `luci-app-pon-status` | 0.4.6-r4 | PON 光模块 + 端口速率 + 连接数概览卡片 | 状态 → 概览 | `airoha-ponctl`、`jsonfilter`、`rpcd-mod-file`、`luci-mod-status` |
 | `luci-app-igmpproxy` | 2.0-r1 | igmpproxy 的 Web 配置界面（IPv4 组播转发，纯 JS） | 服务 → IGMP Proxy | `rpcd-mod-file`、`igmpproxy` |
+| `luci-app-ledpanel` | 1.0.0-r1 | 面板 LED 控制与语义守护（PCA9555，光信号/光纤灯按原厂语义） | 系统 → 面板 LED | `jsonfilter`、`rpcd` |
 
 
 ---
@@ -107,6 +108,37 @@ make package/luci-app-pon-status/compile V=s
 - `altnet` 填的是**组播流的源 IP 网段**（运营商服务器的单播地址），不是 `239.x.x.x` 这类频道组播组地址。未知时先用 `0.0.0.0/0` 排障，能播后看 `logread | grep igmpproxy` 里 `is not in any valid net` 报出的源地址再收紧；少数版本对 `/0` 解析有问题，可拆成 `0.0.0.0/1` + `128.0.0.0/1`。
 - 页面不提供「日志级别」字段，需要详细日志时 SSH 执行 `uci set igmpproxy.@igmpproxy[0].verbose='3'; uci commit igmpproxy` 再重启服务（官方 init 映射为 `-v -v`）。
 - 还要在 LAN 桥上开 IGMP Snooping，否则组播会在内网泛洪。原生组播不适合 WiFi，无线观看需另配 `udpxy` / `msd_lite` 转单播；播放地址是原始 `rtp://239.x.x.x:port`。**仅支持 IPv4**。
+
+
+### luci-app-ledpanel —— 面板 LED 控制（PCA9555）
+
+给 **AN4475-G2 / HG5382A 这类 PCA9555 面板灯机型**用的。面板 14 颗灯挂在 I2C 扩展器（`2-0020`）上，电源灯在 SoC GPIO35。页面在 **系统 → 面板 LED**，可以逐颗改模式、试亮 5 秒、看实时状态，也能一键全部常亮/常灭/恢复自动。
+
+它不只是个「点灯器」，核心是 `/usr/sbin/ledpaneld` 这个守护按语义下发状态：
+
+| 灯 | sysfs | 自动模式下的表现 |
+|---|---|---|
+| 电源 | `green:power` | 常亮 |
+| 光信号 | `red:los` | **无光 1Hz 闪红**；有光熄灭 |
+| 光纤 | `green:wan-online` | 无光灭；有光未注册 1Hz 闪；`onu_state=O5` 常亮 |
+| 下行 PON | `green:pon-downlink` | 配置的 netdev carrier |
+| 系统（绿/红） | `green:sys` / `red:sys` | 常亮 / 常灭 |
+| VPN | `green:vpn` | 配置的隧道接口 up 时亮 |
+| WLAN | `green:wlan` | 有终端关联时亮 |
+| USB / USB2 | `green:usb` / `green:usb2` | 总线上有设备时亮 |
+| 2.5G 光口 | `green:2g5-fiber` | SFP 口 carrier |
+| 语音 1–4 | `green:voice1..4` | 本机型 FXS 无 sysfs 状态源，默认不亮（不做假指示） |
+
+**为什么要在用户态做**：这块板是贴片 paged BOSA，没有 SFP EEPROM，数字 PON PHY 的 `SFP_STA` bit0 恒为 0，驱动据此算出的 `optical_signal` 恒为「有光」。于是 DTS 里即使绑了 `pon0-los` / `pon0-online`，红灯拔纤也不会亮、光纤灯也不闪。本包绕开那个假信号，直接读 `rx_power_dbm` / `onu_state` 自己判断。
+
+灯名与 sysfs 的映射只维护在 `ledpaneld` 里一份，rpcd 后端通过 `ledpaneld spec` 取，页面再从后端拿，不会出现两处映射漂移。
+
+排障要点：
+
+- 无光阈值默认 **-25 dBm**（`los_rx_threshold`）。如果这条线实际收光在 -27 ～ -25 之间会误判成无光，按实测值调低即可。
+- 守护 `START=99`，必须排在 `/etc/init.d/led` 之后，否则 gpio-leds 的默认触发器会把刚写好的状态顶回去。
+- 面板灯是**低有效**，且 `led core` 对「写入与当前相同的 brightness」会短路，所以测试时别只用 `cat brightness` 判断，要连 `trigger` 一起看（`timer` 表示正在闪）。
+- `voice_hook` 规则留了 `voice_cmd` 外部命令钩子，能拿到摘挂机状态时配上去就会亮；默认空着，灯保持熄灭。
 
 
 ## 自动构建

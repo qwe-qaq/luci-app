@@ -1,0 +1,10 @@
+#!/bin/sh
+# 首次安装/首次启动时启用开机自启。/etc/config/ledpanel 由包本身提供，这里只挂 rc.d。
+# 不在 uci-defaults 里直接 start：这个脚本在 boot 阶段先于 rc.d 执行，
+# 交给 S99ledpaneld 统一拉起才不会和 /etc/init.d/led 抢时序。
+
+[ -n "$IPKG_INSTROOT" ] && exit 0
+
+/etc/init.d/ledpaneld enable
+
+exit 0

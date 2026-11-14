@@ -1,0 +1,78 @@
+# 面板 LED（PCA9555）配置
+#
+# mode 取值：
+#   auto   按内置规则显示（默认，见下表）
+#   on     常亮
+#   off    常灭
+#   blink  闪烁，周期取 blink_ms（缺省用 settings.blink_ms）
+#
+# 灯的语义（auto）：
+#   power    green:power        常亮
+#   los      red:los            无光 1Hz 闪；有光灭
+#   wan      green:wan-online   无光灭；有光未注册 1Hz 闪；O5 常亮
+#   downlink green:pon-downlink 下联 PON 口 carrier（本机型无对应 netdev 时灭）
+#   sys      green:sys          常亮
+#   sys_red  red:sys            常灭（故障指示，需要时手动 on）
+#   vpn      green:vpn          配置的 VPN 接口 up 时亮
+#   wlan     green:wlan         有无线终端关联时亮
+#   usb      green:usb          总线上有 USB 设备时亮
+#   usb2     green:usb2         同 usb
+#   sfp      green:2g5-fiber    SFP 口 carrier
+#   voice1-4 green:voiceN       本机型 FXS 无 sysfs 状态源，默认不亮
+
+config settings 'settings'
+	option enabled '1'
+	option interval '1'
+	option pon_device 'pon0'
+	option los_rx_threshold '-25'
+	option blink_ms '500'
+	option vpn_iface ''
+	option wlan_iface ''
+	option sfp_iface 'sfp0'
+	option downlink_iface ''
+	option voice_cmd ''
+
+config led 'power'
+	option mode 'auto'
+
+config led 'los'
+	option mode 'auto'
+
+config led 'wan'
+	option mode 'auto'
+
+config led 'downlink'
+	option mode 'auto'
+
+config led 'sys'
+	option mode 'auto'
+
+config led 'sys_red'
+	option mode 'auto'
+
+config led 'vpn'
+	option mode 'auto'
+
+config led 'wlan'
+	option mode 'auto'
+
+config led 'usb'
+	option mode 'auto'
+
+config led 'usb2'
+	option mode 'auto'
+
+config led 'sfp'
+	option mode 'auto'
+
+config led 'voice1'
+	option mode 'auto'
+
+config led 'voice2'
+	option mode 'auto'
+
+config led 'voice3'
+	option mode 'auto'
+
+config led 'voice4'
+	option mode 'auto'
