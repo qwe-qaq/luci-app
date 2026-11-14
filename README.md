@@ -9,7 +9,7 @@
 | `luci-app-natmode` | 0.1.6-r1 | NAT 类型三选一：全锥形 / 受限 / 对称 | 网络 → NAT 类型 | `firewall4`、`kmod-nft-fullcone` |
 | `luci-app-pon-status` | 0.4.6-r4 | PON 光模块 + 端口速率 + 连接数概览卡片 | 状态 → 概览 | `airoha-ponctl`、`jsonfilter`、`rpcd-mod-file`、`luci-mod-status` |
 | `luci-app-igmpproxy` | 2.0-r1 | igmpproxy 的 Web 配置界面（IPv4 组播转发，纯 JS） | 服务 → IGMP Proxy | `rpcd-mod-file`、`igmpproxy` |
-| `luci-app-ledpanel` | 1.0.0-r1 | 面板 LED 控制与语义守护（PCA9555，光信号/光纤灯按原厂语义） | 系统 → 面板 LED | `jsonfilter`、`rpcd` |
+| `luci-app-ledpanel` | 1.0.0-r2 | 面板 LED 控制与语义守护（PCA9555，光信号/光纤灯按原厂语义） | 系统 → 面板 LED | `rpcd`（装了 `airoha-ponctl` 则作为兜底状态源） |
 
 
 ---
@@ -24,6 +24,7 @@ Release 里有每次推送自动打好的包，`snapshot` 这个 tag 始终指�
 luci-app-natmode-0.1.6-r1.apk         luci-app-natmode_0.1.6-r1_all.ipk
 luci-app-pon-status-0.4.6-r4.apk      luci-app-pon-status_0.4.6-r4_all.ipk
 luci-app-igmpproxy-2.0-r1.apk         luci-app-igmpproxy_2.0-r1_all.ipk
+luci-app-ledpanel-1.0.0-r2.apk        luci-app-ledpanel_1.0.0-r2_all.ipk
 ```
 
 - **`.apk`** 给 OpenWrt **25.12 及之后**（包管理器是 apk）：
@@ -112,7 +113,10 @@ make package/luci-app-pon-status/compile V=s
 
 ### luci-app-ledpanel —— 面板 LED 控制（PCA9555）
 
-给 **AN4475-G2 / HG5382A 这类 PCA9555 面板灯机型**用的。面板 14 颗灯挂在 I2C 扩展器（`2-0020`）上，电源灯在 SoC GPIO35。页面在 **系统 → 面板 LED**，可以逐颗改模式、试亮 5 秒、看实时状态，也能一键全部常亮/常灭/恢复自动。
+给 **AN4475-G2** 用的。同为 PCA9555 面板的 HG5382A 等机型脚位不同，装上只会把灯点错——
+要移植得先按 `debugfs` 的 `2-0020` 段改 `ledpaneld` 里的 `led_spec`。
+
+这块板的面板 14 颗灯挂在 I2C 扩展器（`2-0020`）上，电源灯在 SoC GPIO35。页面在 **系统 → 面板 LED**，可以逐颗改模式、试亮 5 秒、看实时状态，也能一键全部常亮/常灭/恢复自动。
 
 它不只是个「点灯器」，核心是 `/usr/sbin/ledpaneld` 这个守护按语义下发状态：
 
@@ -125,11 +129,14 @@ make package/luci-app-pon-status/compile V=s
 | 系统（绿/红） | `green:sys` / `red:sys` | 常亮 / 常灭 |
 | VPN | `green:vpn` | 配置的隧道接口 up 时亮 |
 | WLAN | `green:wlan` | 有终端关联时亮 |
-| USB / USB2 | `green:usb` / `green:usb2` | 总线上有设备时亮 |
+| USB / USB2 | `green:usb-1` / `green:usb-2` | 按链路速率分：USB2.0 侧（≤480M）/ SuperSpeed 侧（>480M） |
 | 2.5G 光口 | `green:2g5-fiber` | SFP 口 carrier |
 | 语音 1–4 | `green:voice1..4` | 本机型 FXS 无 sysfs 状态源，默认不亮（不做假指示） |
 
-**为什么要在用户态做**：这块板是贴片 paged BOSA，没有 SFP EEPROM，数字 PON PHY 的 `SFP_STA` bit0 恒为 0，驱动据此算出的 `optical_signal` 恒为「有光」。于是 DTS 里即使绑了 `pon0-los` / `pon0-online`，红灯拔纤也不会亮、光纤灯也不闪。本包绕开那个假信号，直接读 `rx_power_dbm` / `onu_state` 自己判断。
+**为什么要在用户态做**：这块板是贴片 paged BOSA，没有 SFP EEPROM，数字 PON PHY 的 `SFP_STA` bit0 恒为 0，驱动据此算出的 `optical_signal` 恒为「有光」。于是 DTS 里即使绑了 `pon0-los` / `pon0-online`，红灯拔纤也不会亮、光纤灯也不闪。本包绕开那个假信号，直接读收光功率与注册态自己判断：优先取 debugfs 的
+`frontend` / `registration` / `line` / `pcs`（当前内核没有汇总的 `status` 文件），
+把 8472 原始寄存器按 `dBm = 10*log10(raw) - 40` 换算；debugfs 不可读时才退回
+`ponctl status`，所以**没装 `airoha-ponctl` 也能正常工作**。
 
 灯名与 sysfs 的映射只维护在 `ledpaneld` 里一份，rpcd 后端通过 `ledpaneld spec` 取，页面再从后端拿，不会出现两处映射漂移。
 

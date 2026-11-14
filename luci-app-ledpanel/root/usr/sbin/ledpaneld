@@ -179,17 +179,43 @@ num_gt() {
 	awk -v a="$1" -v b="$2" 'BEGIN { exit !(a + 0 > b + 0) }'
 }
 
+# 8472 的收光寄存器是 be16、单位 0.1 µW：dBm = 10*log10(raw) - 40（raw 32 ≈ -25 dBm）。
+# 内核 debugfs 只给原始值，这里自己换算；raw=0 表示无光，直接给 -40。
+# 不用 strtonum（busybox awk 没有），手写十六进制累加。
+rx_dbm_from_raw() {
+	awk -v v="$1" 'BEGIN {
+		h = tolower(v); sub(/^0x/, "", h)
+		if (h == "") { print ""; exit }
+		n = 0
+		for (i = 1; i <= length(h); i++) {
+			c = index("0123456789abcdef", substr(h, i, 1))
+			if (c == 0) { print ""; exit }
+			n = n * 16 + c - 1
+		}
+		if (n <= 0) { printf "-40.00"; exit }
+		printf "%.2f", 10 * log(n) / log(10) - 40
+	}'
+}
+
 collect_state() {
 	ST=""
 	_f="$PON_DBG/status"
 	if [ -r "$_f" ]; then
 		ST=$(cat "$_f" 2>/dev/null)
+	elif [ -r "$PON_DBG/frontend" ]; then
+		# 当前内核没有汇总的 status，而是按功能拆成几个文件，字段格式一样
+		# （"key: value"），拼起来即可：rx_power_8472 在 frontend、onu_state 在
+		# registration、optical_signal 在 line、xgtc_sync 在 pcs。
+		# 优先走这条路：省掉每秒 fork 一次 ponctl，也不依赖 airoha-ponctl 装没装。
+		ST=$(cat "$PON_DBG/frontend" "$PON_DBG/registration" \
+			  "$PON_DBG/line" "$PON_DBG/pcs" 2>/dev/null)
 	elif command -v ponctl >/dev/null 2>&1; then
 		ST=$(ponctl --device "$PON_DEV" status 2>/dev/null)
 	fi
 
 	# 收光功率优先；拿不到就退回驱动自己的 optical_signal
 	_rx=$(field rx_power_dbm)
+	[ -n "$_rx" ] || _rx=$(rx_dbm_from_raw "$(field rx_power_8472)")
 	if [ -n "$_rx" ]; then
 		if num_gt "$_rx" "$LOS_RX"; then
 			HAS_LIGHT=1

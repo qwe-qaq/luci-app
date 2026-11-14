@@ -3,9 +3,9 @@
 include $(TOPDIR)/rules.mk
 
 LUCI_TITLE:=LuCI panel LED control for AN4475-G2 (PCA9555, PON LOS/WAN semantics)
-LUCI_DEPENDS:=+luci-base +rpcd +ubus +jsonfilter
+LUCI_DEPENDS:=+luci-base +rpcd +ubus
 PKG_VERSION:=1.0.0
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 PKG_LICENSE:=Apache-2.0
 PKG_MAINTAINER:=qwe-qaq
