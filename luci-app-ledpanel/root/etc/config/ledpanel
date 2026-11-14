@@ -17,7 +17,8 @@
 #   wlan     green:wlan         有无线终端关联时亮
 #   usb      green:usb-1        接入 USB 2.0 设备（协商速率 ≤480M）时亮
 #   usb2     green:usb-2        接入 USB 3.x 设备（协商速率 >480M）时亮
-#   sfp      green:2g5-fiber    2.5G 光电复用口 carrier（sfp_iface 可空格分隔多个 netdev）
+#   sfp      green:2g5-fiber    2.5G 光口(SFP 笼) carrier，默认只看 sfp0；
+#                               铜口由 RJ45 自带 LED 指示，不要把 lan1 填进来
 #   voice1-4 green:voiceN       本机型 FXS 无 sysfs 状态源，默认不亮
 
 config settings 'settings'
@@ -28,7 +29,7 @@ config settings 'settings'
 	option blink_ms '500'
 	option vpn_iface ''
 	option wlan_iface ''
-	option sfp_iface 'sfp0 lan1'
+	option sfp_iface 'sfp0'
 	option downlink_iface ''
 	option voice_cmd ''
 

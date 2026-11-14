@@ -239,15 +239,15 @@ return view.extend({
 				])
 			]),
 			E('div', { 'class': 'cbi-value' }, [
-				E('label', { 'class': 'cbi-value-title' }, _('2.5G 光电复用口接口')),
+				E('label', { 'class': 'cbi-value-title' }, _('2.5G 光口接口')),
 				E('div', { 'class': 'cbi-value-field' }, [
 					E('input', {
 						'class': 'cbi-input-text',
 						'style': 'width:14em',
-						'value': set.sfp_iface || 'sfp0 lan1',
+						'value': set.sfp_iface || 'sfp0',
 						'change': function(ev) { return self.handleSetting('sfp_iface', ev.target.value); }
 					}),
-					E('div', { 'class': 'cbi-value-description' }, _('空格分隔多个 netdev；任一 carrier 为 1 时 2.5G 口灯亮。铜口 lan1 与光口 sfp0 共用这颗灯。'))
+					E('div', { 'class': 'cbi-value-description' }, _('默认只看光口 sfp0 的 carrier。空格分隔可填多个 netdev；若填入 lan1，插网线时这颗光口灯也会亮。铜口状态由 RJ45 自带 LED 指示。'))
 				])
 			])
 		]);
