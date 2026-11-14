@@ -171,9 +171,9 @@ num_gt() {
 }
 
 # 8472 收光寄存器 be16、单位 0.1 µW：dBm = 10*log10(raw) - 40（raw 32 ≈ -25 dBm）。
-# raw=0 不是"无光"，是"模块没给出读数"（本板 paged BOSA 无 EEPROM，DDM 寄存器
-# 恒 0）—— 必须返回空让调用方回退到驱动的 optical_signal，不能换算成 -40 dBm
-# 当成弱光，否则有光也会被判定成无光。busybox awk 无 strtonum，手写十六进制累加。
+# raw=0 直接记 -40 dBm（低于任何可用阈值）＝无光。本板 paged BOSA 无 EEPROM，
+# DDM 恒 0，这正是"读不到功率"的常态，按无光处理即可。
+# busybox awk 无 strtonum，手写十六进制累加。
 rx_dbm_from_raw() {
 	awk -v v="$1" 'BEGIN {
 		h = tolower(v); sub(/^0x/, "", h)
@@ -184,7 +184,7 @@ rx_dbm_from_raw() {
 			if (c == 0) { print ""; exit }
 			n = n * 16 + c - 1
 		}
-		if (n <= 0) { print ""; exit }
+		if (n <= 0) { printf "-40.00"; exit }
 		printf "%.2f", 10 * log(n) / log(10) - 40
 	}'
 }
@@ -204,13 +204,9 @@ collect_state() {
 		ST=$(ponctl --device "$PON_DEV" status 2>/dev/null)
 	fi
 
-	# 收光功率优先；没有功率读数时只能看 PCS。
-	#
-	# 本板 optical_signal / signal_detected / rx_active 三个都恒为 1：贴片 paged
-	# BOSA 没有 EEPROM，LOS 检测引脚悬空，拔掉光纤照样报"有光"，dmesg 于是刷
-	# "optical signal present without XGTC sync" 并无限重启 RX。所以它们不能
-	# 当作有光证据。无光时 PCS 必然锁不住接收频率，改用 freqdet_locked：
-	# 代价只是会漏报（有光但频率没锁上时显示无光），不会把断纤显示成有光。
+	# 收光功率优先。raw=0 已被换算成 -40 dBm，走 dBm 分支即判无光；
+	# 只有连 rx_power_8472 字段都没有时才退回 optical_signal（本板该值恒 1，
+	# 仅作最后兜底，不参与常规判断）。
 	_rx=$(field rx_power_dbm)
 	[ -n "$_rx" ] || _rx=$(rx_dbm_from_raw "$(field rx_power_8472)")
 	if [ -n "$_rx" ]; then
@@ -220,7 +216,7 @@ collect_state() {
 			HAS_LIGHT=0
 		fi
 	else
-		case "$(field freqdet_locked)" in
+		case "$(field optical_signal)" in
 			1|true|yes) HAS_LIGHT=1 ;;
 			*)          HAS_LIGHT=0 ;;
 		esac
@@ -363,6 +359,11 @@ apply_led() {
 			echo timer > "$_p/trigger" 2>/dev/null
 			echo "$_d" > "$_p/delay_on" 2>/dev/null
 			echo "$_d" > "$_p/delay_off" 2>/dev/null
+			# timer 下必须再写 brightness=1 才真正启动闪烁；只设 trigger 和
+			# delay 的话，灯会停在之前 off 分支留下的 0 上（踩过：断纤时
+			# LOS 该闪却不亮，trigger 显示 [timer]、delay 也正常，纯看状态
+			# 完全看不出问题）。
+			echo 1 > "$_p/brightness" 2>/dev/null
 			;;
 	esac
 
