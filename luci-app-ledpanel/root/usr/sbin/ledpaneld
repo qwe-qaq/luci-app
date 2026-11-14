@@ -1,7 +1,9 @@
 #!/bin/sh
 # ledpaneld - AN4475-G2 面板指示灯策略守护
 #
-# 14 颗面板灯在 PCA9555(2-0020)，电源灯在 SoC GPIO35。DTS 曾绑 pon0-los /
+# 14 颗面板灯在 PCA9555（i2c-gpio 位操作总线上的 0x20），电源灯在 SoC GPIO35。
+# 该总线在 sysfs 里的编号不固定（DTS 增删任何 i2c 控制器都会让它前移/后移），
+# 所以一切定位都按 "parent: i2c/" 判定，不写死总线号。DTS 曾绑 pon0-los /
 # pon0-online，但本板是贴片 paged BOSA、无 SFP EEPROM，驱动算出的 optical_signal
 # 恒为"有光"，两个触发器永不动作 —— 故在用户态按原厂语义重算。
 #
@@ -40,10 +42,10 @@ log() {
 
 # 名字 -> "sysfs 规则名 脚位"
 #
-# 脚位是 PCA9555(2-0020) 的走线：P0.0=0 … P0.7=7，P1.0=8 … P1.5=13，
+# 脚位是 PCA9555 的走线：P0.0=0 … P0.7=7，P1.0=8 … P1.5=13，
 # P1.6/P1.7 空；电源灯在 SoC GPIO35，记 -。脚位由 PCB 决定不会变，sysfs 名
 # 只是 DTS label —— 上游改名时按脚位反查（led_path），不用改代码。
-# 实测对应见 /sys/kernel/debug/gpio 的 2-0020 段。
+# 实测对应见 /sys/kernel/debug/gpio 里 parent 为 i2c 的那个 gpiochip 段。
 led_spec() {
 	case "$1" in
 		power)    echo "green:power always_on -" ;;
@@ -79,8 +81,9 @@ pin_name() {
 
 # label 落成真实 sysfs 目录。
 # 常态直接命中 $LED_ROOT/<label>；命中不了说明 DTS 改了 label，就按脚位去
-# debugfs 查这一脚当前被谁占着。只匹配 2-0020 段 —— SoC 的 gpiochip 也有
-# 0~15 这些号，不过滤会串到别的灯。
+# debugfs 查这一脚当前被谁占着。只认 parent 是 i2c 的 gpiochip（即 PCA9555）：
+# SoC 的 gpiochip 也有 0~15 这些号，不过滤会串到别的灯；也不能写死总线号
+# （曾经是 2-0020，DTS 关掉硬件 i2c1 后变成 1-0020，反查就静默失效了）。
 led_path() {
 	_lbl=$1
 	_pin=$2
@@ -91,7 +94,7 @@ led_path() {
 	case "$_pin" in ''|-|*[!0-9]*) return 1 ;; esac
 	[ -r "$GPIO_DBG" ] || return 1
 	_alt=$(awk -v p="gpio-$_pin" '
-		/^gpiochip/ { sec = (index($0, "2-0020") > 0); next }
+		/^gpiochip/ { sec = (index($0, "parent: i2c/") > 0); next }
 		sec && $1 == p {
 			s = $0
 			sub(/^[^(]*\(/, "", s); sub(/\).*/, "", s)

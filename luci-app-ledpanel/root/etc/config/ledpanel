@@ -15,8 +15,8 @@
 #   sys_red  red:sys            常灭（故障指示，需要时手动 on）
 #   vpn      green:vpn          配置的 VPN 接口 up 时亮
 #   wlan     green:wlan         有无线终端关联时亮
-#   usb      green:usb          总线上有 USB 设备时亮
-#   usb2     green:usb2         同 usb
+#   usb      green:usb-1        接入 USB 2.0 设备（协商速率 ≤480M）时亮
+#   usb2     green:usb-2        接入 USB 3.x 设备（协商速率 >480M）时亮
 #   sfp      green:2g5-fiber    SFP 口 carrier
 #   voice1-4 green:voiceN       本机型 FXS 无 sysfs 状态源，默认不亮
 
