@@ -36,10 +36,12 @@ rm -rf "$TMP"
 mkdir -p "$TMP"
 trap 'rm -rf "$TMP"' EXIT
 
-# 取 Makefile 中 KEY:=value 的 value（保留右侧原样）
+# 取 Makefile 中 KEY:=value 的 value（保留右侧原样）。
+# tr 去 CR：Makefile 若被 Windows 编辑器存成 CRLF，取到的值会带 \r，
+# 文件名非法（upload-artifact 拒绝），control 里的 Version 也会被污染。
 field() {
 	local mk="$1" key="$2"
-	sed -n "s/^${key}:=//p" "$mk" | tail -1
+	sed -n "s/^${key}:=//p" "$mk" | tr -d '\r' | tail -1
 }
 
 # LUCI_DEPENDS 是 ipk 记法 "+luci-base +firewall4"；

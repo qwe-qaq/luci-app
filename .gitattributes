@@ -1,15 +1,4 @@
-# 强制 shell 脚本 / 工作流 / UCI 配置用 LF（含无扩展名的 sbin、init.d 脚本），
-# 避免 Windows 上检出成 CRLF 后，runner 或路由器执行时报 "bad interpreter: ...^M"。
-*.sh    text eol=lf
-*.bash  text eol=lf
-*.init  text eol=lf
-*.yml   text eol=lf
-*.yaml  text eol=lf
-luci-app-*/root/usr/sbin/*         text eol=lf
-luci-app-*/root/usr/bin/*          text eol=lf
-luci-app-*/root/etc/init.d/*       text eol=lf
-luci-app-*/root/etc/config/*       text eol=lf
-luci-app-*/root/etc/uci-defaults/* text eol=lf
-luci-app-*/root/usr/share/luci-app-*/* text eol=lf
-luci-app-*/ipk-postinst                 text eol=lf
-luci-app-*/ipk-prerm                    text eol=lf
+# 全仓库文本一律 LF（仓库内与检出都是），本仓库同时在 Windows 与 Linux runner 上改。
+# CR 混进来的两个后果都是硬故障：脚本报 "bad interpreter: /bin/sh^M"；
+# build-*.sh 从 Makefile 取到的 PKG_VERSION 带 \r，生成的文件名被 upload-artifact 拒绝。
+* text=auto eol=lf

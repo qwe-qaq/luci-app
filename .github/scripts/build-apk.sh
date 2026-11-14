@@ -26,10 +26,12 @@ OUT_DIR="${2:-dist}"
 APK="$(cd "$(dirname "$APK_IN")" && pwd)/$(basename "$APK_IN")"
 OUT="$(mkdir -p "$OUT_DIR" && cd "$OUT_DIR" && pwd)"
 
-# 取 Makefile 中 KEY:=value 的 value（保留右侧原样）
+# 取 Makefile 中 KEY:=value 的 value（保留右侧原样）。
+# tr 去 CR：Makefile 若被 Windows 编辑器存成 CRLF，取到的值会带 \r，拼进文件名
+# 就成了 "xxx_1.0.0\r-r2\r_all.ipk"，upload-artifact 会直接拒绝。
 field() {
 	local mk="$1" key="$2"
-	sed -n "s/^${key}:=//p" "$mk" | tail -1
+	sed -n "s/^${key}:=//p" "$mk" | tr -d '\r' | tail -1
 }
 
 # LUCI_DEPENDS 是 ipk 记法："+luci-base +firewall4"；
