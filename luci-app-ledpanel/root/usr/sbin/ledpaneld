@@ -22,15 +22,24 @@ CONFIG=ledpanel
 # 顺序即页面里的展示顺序
 LED_LIST="power los wan downlink sys sys_red vpn wlan usb usb2 sfp voice1 voice2 voice3 voice4"
 
+# config_load / config_get 来自 /lib/functions.sh。用它而不是每颗灯每次 `uci get`：
+# 15 颗灯每秒 2~3 次 uci 调用就是 40 多个进程/秒，低端 CPU 扛不住。
+# config_load 只 spawn 一次 uci，之后 config_get 是纯 shell 函数。
+# 本机跑回归测试时没有这个文件，用 uci get 兜底一份同签名实现。
+# 注意：`if ! . file` 拦不住——非交互 shell 里 source 不存在的文件会直接终止脚本，
+# 所以必须先判断存在再 source。
+if [ -r /lib/functions.sh ]; then
+	. /lib/functions.sh
+else
+	config_load() { :; }
+	config_get() {
+		_v=$(uci -q get "$CONFIG.$2.$3" 2>/dev/null)
+		eval "$1=\"\${_v:-$4}\""
+	}
+fi
+
 log() {
 	logger -t ledpaneld "$*" 2>/dev/null
-}
-
-# uci 取值；缺失时回退到默认值
-opt() {
-	_v=$(uci -q get "$CONFIG.$1.$2" 2>/dev/null)
-	[ -n "$_v" ] || _v="$3"
-	printf '%s' "$_v"
 }
 
 # 名字 -> "sysfs 规则名"
@@ -245,16 +254,24 @@ apply_led() {
 }
 
 load_config() {
-	ENABLED=$(opt settings enabled 1)
-	INTERVAL=$(opt settings interval 1)
-	PON_DEV=$(opt settings pon_device pon0)
-	LOS_RX=$(opt settings los_rx_threshold -25)
-	BLINK_MS=$(opt settings blink_ms 500)
-	VPN_IFACE=$(opt settings vpn_iface "")
-	WLAN_IFACE=$(opt settings wlan_iface "")
-	SFP_IFACE=$(opt settings sfp_iface sfp0)
-	DOWNLINK_IFACE=$(opt settings downlink_iface "")
-	VOICE_CMD=$(opt settings voice_cmd "")
+	config_load "$CONFIG"
+	config_get ENABLED       settings enabled           1
+	config_get INTERVAL      settings interval          1
+	config_get PON_DEV       settings pon_device        pon0
+	config_get LOS_RX        settings los_rx_threshold  -25
+	config_get BLINK_MS      settings blink_ms          500
+	config_get VPN_IFACE     settings vpn_iface         ""
+	config_get WLAN_IFACE    settings wlan_iface        ""
+	config_get SFP_IFACE     settings sfp_iface         sfp0
+	config_get DOWNLINK_IFACE settings downlink_iface   ""
+	config_get VOICE_CMD     settings voice_cmd         ""
+
+	# 每颗灯的模式一次读齐，后面循环里不再碰 uci
+	for _n in $LED_LIST; do
+		config_get "MODE_$_n" "$_n" mode     auto
+		config_get "BMS_$_n"  "$_n" blink_ms ""
+	done
+
 	PON_DBG=${PON_DBG_OVERRIDE:-/sys/kernel/debug/airoha-xpon-$PON_DEV}
 }
 
@@ -268,7 +285,7 @@ tick() {
 		[ -n "$1" ] || continue
 		_sys=$1
 		_rule=$2
-		_mode=$(opt "$_n" mode auto)
+		eval "_mode=\$MODE_$_n"
 
 		# 页面上的「试亮 N 秒」写 override 文件，到点自动失效回到配置
 		_ov="$RUN_DIR/override.$_n"
@@ -284,7 +301,9 @@ tick() {
 		case "$_mode" in
 			on)    _want=on ;;
 			off)   _want=off ;;
-			blink) _want="blink:$(opt "$_n" blink_ms "$BLINK_MS")" ;;
+			blink) eval "_bms=\$BMS_$_n"
+			       [ -n "$_bms" ] || _bms="$BLINK_MS"
+			       _want="blink:$_bms" ;;
 			*)     _want=$(rule_state "$_rule") ;;
 		esac
 
@@ -293,12 +312,20 @@ tick() {
 }
 
 stop_apply() {
-	# 退出前把灯交还内核默认（DTS 的 linux,default-trigger）
+	# 守护退出时把灯收干净：业务灯全灭，只留电源与系统灯亮着（设备带电的常规表现）。
+	# 不写回 DTS 的 default-trigger —— 那些触发器在本板本来就不动作，
+	# 回写只会让灯停在"有光"的假状态上。
 	for _n in $LED_LIST; do
 		# shellcheck disable=SC2046
 		set -- $(led_spec "$_n")
 		[ -n "$1" ] || continue
-		printf 'none' > "$LED_ROOT/$1/trigger" 2>/dev/null
+		_p="$LED_ROOT/$1"
+		[ -d "$_p" ] || continue
+		printf 'none' > "$_p/trigger" 2>/dev/null
+		case "$_n" in
+			power|sys) printf '%s' "$(cat "$_p/max_brightness" 2>/dev/null || echo 1)" > "$_p/brightness" 2>/dev/null ;;
+			*)         printf '0' > "$_p/brightness" 2>/dev/null ;;
+		esac
 	done
 	rm -f "$RUN_DIR"/* 2>/dev/null
 }
