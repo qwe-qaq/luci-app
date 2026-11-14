@@ -15,6 +15,7 @@
 
 # 路径可用环境变量覆盖，只为本机回归测试用；生产环境不要设置
 LED_ROOT=${LEDPANEL_LED_ROOT:-/sys/class/leds}
+GPIO_DBG=${LEDPANEL_GPIO_DBG:-/sys/kernel/debug/gpio}
 RUN_DIR=${LEDPANEL_RUN_DIR:-/var/run/ledpanel}
 PON_DBG_OVERRIDE=${LEDPANEL_PON_DBG:-}
 CONFIG=ledpanel
@@ -42,26 +43,73 @@ log() {
 	logger -t ledpaneld "$*" 2>/dev/null
 }
 
-# 名字 -> "sysfs 规则名"
+# 名字 -> "sysfs 规则名 脚位"
+#
+# 第三列是 PCA9555（i2c 2-0020，gpiochip576）上的实际脚位号：
+#   P0.0=0 … P0.7=7，P1.0=8 … P1.5=13，P1.6/P1.7 空。
+# 电源灯不在扩展器上，走 SoC GPIO35，记 -。
+#
+# 为什么记脚位：脚位是 PCB 走线，永远不会变；sysfs 名字只是 DTS 里的 label，
+# 上游改一次 DTS 这边就全断。label 定位失败时用脚位反查（led_path），
+# 页面也按脚位展示，拿万用表对着板子能直接对位。
+# 实测对应关系见 /sys/kernel/debug/gpio 的 2-0020 段。
 led_spec() {
 	case "$1" in
-		power)    echo "green:power always_on" ;;
-		los)      echo "red:los pon_los" ;;
-		wan)      echo "green:wan-online pon_wan" ;;
-		downlink) echo "green:pon-downlink pon_downlink" ;;
-		sys)      echo "green:sys always_on" ;;
-		sys_red)  echo "red:sys always_off" ;;
-		vpn)      echo "green:vpn vpn_up" ;;
-		wlan)     echo "green:wlan wlan_sta" ;;
-		usb)      echo "green:usb usb_present" ;;
-		usb2)     echo "green:usb2 usb_present" ;;
-		sfp)      echo "green:2g5-fiber sfp_link" ;;
-		voice1)   echo "green:voice1 voice_hook" ;;
-		voice2)   echo "green:voice2 voice_hook" ;;
-		voice3)   echo "green:voice3 voice_hook" ;;
-		voice4)   echo "green:voice4 voice_hook" ;;
+		power)    echo "green:power always_on -" ;;
+		los)      echo "red:los pon_los 1" ;;
+		wan)      echo "green:wan-online pon_wan 0" ;;
+		downlink) echo "green:pon-downlink pon_downlink 2" ;;
+		sys)      echo "green:sys always_on 3" ;;
+		sys_red)  echo "red:sys always_off 4" ;;
+		vpn)      echo "green:vpn vpn_up 5" ;;
+		wlan)     echo "green:wlan wlan_sta 6" ;;
+		usb)      echo "green:usb usb_present 8" ;;
+		usb2)     echo "green:usb2 usb_present 7" ;;
+		sfp)      echo "green:2g5-fiber sfp_link 9" ;;
+		voice1)   echo "green:voice1 voice_hook 10" ;;
+		voice2)   echo "green:voice2 voice_hook 11" ;;
+		voice3)   echo "green:voice3 voice_hook 12" ;;
+		voice4)   echo "green:voice4 voice_hook 13" ;;
 		*)        echo "" ;;
 	esac
+}
+
+# 脚位号 -> 面板丝印（页面显示用）
+pin_name() {
+	case "$1" in
+		''|-) echo "-" ;;
+		[0-7]) echo "P0.$1" ;;
+		8) echo "P1.0" ;; 9) echo "P1.1" ;; 10) echo "P1.2" ;;
+		11) echo "P1.3" ;; 12) echo "P1.4" ;; 13) echo "P1.5" ;;
+		14) echo "P1.6" ;; 15) echo "P1.7" ;;
+		*) echo "-" ;;
+	esac
+}
+
+# label 落成真实 sysfs 目录。
+# 常态直接命中 $LED_ROOT/<label>；命中不了说明 DTS 改了 label，
+# 这时按脚位去 debugfs 查这一脚当前被谁占着，改用那个名字，不用改代码。
+# 只匹配 2-0020 那一段：SoC 的 gpiochip 也有 0~15 这些号，混起来会串到别的灯。
+led_path() {
+	_lbl=$1
+	_pin=$2
+	if [ -d "$LED_ROOT/$_lbl" ]; then
+		printf '%s' "$LED_ROOT/$_lbl"
+		return 0
+	fi
+	case "$_pin" in ''|-|*[!0-9]*) return 1 ;; esac
+	[ -r "$GPIO_DBG" ] || return 1
+	_alt=$(awk -v p="gpio-$_pin" '
+		/^gpiochip/ { sec = (index($0, "2-0020") > 0); next }
+		sec && $1 == p {
+			s = $0
+			sub(/^[^(]*\(/, "", s); sub(/\).*/, "", s)
+			gsub(/[ \t|]/, "", s)
+			if (s != "") print s
+			exit
+		}' "$GPIO_DBG" 2>/dev/null)
+	[ -n "$_alt" ] && [ -d "$LED_ROOT/$_alt" ] || return 1
+	printf '%s' "$LED_ROOT/$_alt"
 }
 
 # 页面展示用的中文说明
@@ -224,10 +272,10 @@ rule_state() {
 }
 
 # 只在目标状态变化时才写 sysfs：timer 触发器每写一次都会把闪烁相位打回起点
+# $2 是 led_path 解析出来的真实目录，不是 label —— 目录不存在就什么都不做
 apply_led() {
-	_name=$1; _sys=$2; _want=$3
-	_p="$LED_ROOT/$_sys"
-	[ -d "$_p" ] || return 0
+	_name=$1; _p=$2; _want=$3
+	[ -n "$_p" ] && [ -d "$_p" ] || return 0
 
 	_cache="$RUN_DIR/$_name"
 	_prev=$(cat "$_cache" 2>/dev/null)
@@ -280,11 +328,12 @@ tick() {
 	collect_state
 	NOW=$(date +%s)
 	for _n in $LED_LIST; do
-		# shellcheck disable=SC2046  # led_spec 返回两个词，需要按词拆
+		# shellcheck disable=SC2046  # led_spec 返回三个词，需要按词拆
 		set -- $(led_spec "$_n")
 		[ -n "$1" ] || continue
 		_sys=$1
 		_rule=$2
+		_pin=$3
 		eval "_mode=\$MODE_$_n"
 
 		# 页面上的「试亮 N 秒」写 override 文件，到点自动失效回到配置
@@ -307,7 +356,7 @@ tick() {
 			*)     _want=$(rule_state "$_rule") ;;
 		esac
 
-		apply_led "$_n" "$_sys" "$_want"
+		apply_led "$_n" "$(led_path "$_sys" "$_pin")" "$_want"
 	done
 }
 
@@ -319,8 +368,8 @@ stop_apply() {
 		# shellcheck disable=SC2046
 		set -- $(led_spec "$_n")
 		[ -n "$1" ] || continue
-		_p="$LED_ROOT/$1"
-		[ -d "$_p" ] || continue
+		_p=$(led_path "$1" "$3")
+		[ -n "$_p" ] && [ -d "$_p" ] || continue
 		printf 'none' > "$_p/trigger" 2>/dev/null
 		case "$_n" in
 			power|sys) printf '%s' "$(cat "$_p/max_brightness" 2>/dev/null || echo 1)" > "$_p/brightness" 2>/dev/null ;;
@@ -354,12 +403,16 @@ case "$1" in
 			"$HAS_LIGHT" "$SYNC" "$REGISTERED" "$(field rx_power_dbm)" "$(field onu_state)"
 		;;
 	spec)
-		# name|sysfs|rule|说明，给 rpcd 后端和页面共用，避免两处映射漂移
+		# name|sysfs|rule|说明|脚位，给 rpcd 后端和页面共用，避免两处映射漂移
+		# sysfs 列给的是 led_path 解析后的真实目录名：DTS 把 label 改了，
+		# 这里会自动变成新名字，页面和后端不用知道原来的 label。
 		for _n in $LED_LIST; do
 			# shellcheck disable=SC2046
 			set -- $(led_spec "$_n")
 			[ -n "$1" ] || continue
-			printf '%s|%s|%s|%s\n' "$_n" "$1" "$2" "$(led_desc "$_n")"
+			_p=$(led_path "$1" "$3")
+			if [ -n "$_p" ]; then _s=${_p##*/}; else _s=$1; fi
+			printf '%s|%s|%s|%s|%s\n' "$_n" "$_s" "$2" "$(led_desc "$_n")" "$(pin_name "$3")"
 		done
 		;;
 	*)

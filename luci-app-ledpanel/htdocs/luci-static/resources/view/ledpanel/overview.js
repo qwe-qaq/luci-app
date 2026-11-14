@@ -124,6 +124,10 @@ return view.extend({
 			return E('tr', { 'class': 'tr' }, [
 				E('td', { 'class': 'td' }, [
 					E('strong', {}, l.name),
+					' ',
+					/* 脚位来自 PCA9555 实际走线，拿万用表对板子时按这个找；
+					   电源灯不在扩展器上，标 SoC */
+					E('span', { 'class': 'ifacebadge' }, (l.pin && l.pin !== '-') ? l.pin : 'SoC'),
 					E('br'),
 					E('span', { 'class': 'ifacebadge' }, l.sysfs)
 				]),
