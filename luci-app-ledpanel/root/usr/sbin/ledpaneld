@@ -302,7 +302,22 @@ apply_led() {
 
 	_cache="$RUN_DIR/$_name"
 	_prev=$(cat "$_cache" 2>/dev/null)
-	[ "$_prev" = "$_want" ] && return 0
+
+	# 缓存只证明"我上次想设成什么"，不证明"现在还是这个状态"。
+	# /etc/init.d/led（START=96）会按 uci 里的 sysfs 重新绑 netdev 触发器，
+	# 手动 echo 也能改；只比对缓存的话，这种外部改动会被永远忽略，
+	# 灯就停在别人设的状态上（实测 wlan 灯被 uci 抢走后一直回不来）。
+	# 所以缓存命中时再核一次 trigger 名：on/off 要 none，闪烁要 timer。
+	# 用 read 内建读，不 fork 进程；brightness 不核 —— timer 闪烁时它自己在变。
+	_need=none
+	case "$_want" in blink:*) _need=timer ;; esac
+	if [ "$_prev" = "$_want" ]; then
+		_line=
+		read -r _line < "$_p/trigger" 2>/dev/null
+		case "$_line" in
+			*\["$_need"\]*) return 0 ;;
+		esac
+	fi
 
 	case "$_want" in
 		on)
