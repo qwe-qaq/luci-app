@@ -170,8 +170,10 @@ num_gt() {
 	awk -v a="$1" -v b="$2" 'BEGIN { exit !(a + 0 > b + 0) }'
 }
 
-# 8472 收光寄存器 be16、单位 0.1 µW：dBm = 10*log10(raw) - 40（raw 32 ≈ -25 dBm，
-# raw 0 视为无光）。busybox awk 无 strtonum，手写十六进制累加。
+# 8472 收光寄存器 be16、单位 0.1 µW：dBm = 10*log10(raw) - 40（raw 32 ≈ -25 dBm）。
+# raw=0 不是"无光"，是"模块没给出读数"（本板 paged BOSA 无 EEPROM，DDM 寄存器
+# 恒 0）—— 必须返回空让调用方回退到驱动的 optical_signal，不能换算成 -40 dBm
+# 当成弱光，否则有光也会被判定成无光。busybox awk 无 strtonum，手写十六进制累加。
 rx_dbm_from_raw() {
 	awk -v v="$1" 'BEGIN {
 		h = tolower(v); sub(/^0x/, "", h)
@@ -182,7 +184,7 @@ rx_dbm_from_raw() {
 			if (c == 0) { print ""; exit }
 			n = n * 16 + c - 1
 		}
-		if (n <= 0) { printf "-40.00"; exit }
+		if (n <= 0) { print ""; exit }
 		printf "%.2f", 10 * log(n) / log(10) - 40
 	}'
 }
