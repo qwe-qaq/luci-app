@@ -7,4 +7,12 @@
 
 /etc/init.d/ledpaneld enable
 
+# rpcd 只在启动时扫描一遍 /usr/libexec/rpcd，装包前它已经跑起来了，
+# 不重启就不会注册 luci.ledpanel，页面会报
+#   RPC call to luci.ledpanel/status failed with error -32000: Object not found
+# boot 阶段 rpcd 往往还没起（pidof 失败），那种情况交给 rpcd 自己启动时扫描，跳过。
+if pidof rpcd >/dev/null 2>&1; then
+	ubus list 2>/dev/null | grep -qx "luci.ledpanel" || /etc/init.d/rpcd restart >/dev/null 2>&1
+fi
+
 exit 0
